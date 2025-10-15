@@ -22,7 +22,7 @@ case class AddressParams(
 
 case class PortParams(
   axip: AxiParams = AxiParams(),
-  aysnc: Option[AsyncQueueParams] = None,
+  async: Option[AsyncQueueParams] = None,
   addr: AddressParams = AddressParams(),
   pipe: Int = 2,
   outstanding: Int = 32,

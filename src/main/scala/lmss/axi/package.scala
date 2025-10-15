@@ -128,12 +128,12 @@ package object axi {
     def <>(that: ExtAxiBundle): Unit = AxiUtils.extConn(that, this)
   }
 
-  class AsyncAxiBundle(val axiP: AxiParams, val aysncP:AsyncQueueParams) extends Bundle {
-    val aw = new AsyncBundle(UInt(new AWFlit(axiP).getWidth.W), aysncP)
-    val ar = new AsyncBundle(UInt(new ARFlit(axiP).getWidth.W), aysncP)
-    val w = new AsyncBundle(UInt(new WFlit(axiP).getWidth.W), aysncP)
-    val b = Flipped(new AsyncBundle(UInt(new BFlit(axiP).getWidth.W), aysncP))
-    val r = Flipped(new AsyncBundle(UInt(new RFlit(axiP).getWidth.W), aysncP))
+  class AsyncAxiBundle(val axiP: AxiParams, val asyncP:AsyncQueueParams) extends Bundle {
+    val aw = new AsyncBundle(UInt(new AWFlit(axiP).getWidth.W), asyncP)
+    val ar = new AsyncBundle(UInt(new ARFlit(axiP).getWidth.W), asyncP)
+    val w = new AsyncBundle(UInt(new WFlit(axiP).getWidth.W), asyncP)
+    val b = Flipped(new AsyncBundle(UInt(new BFlit(axiP).getWidth.W), asyncP))
+    val r = Flipped(new AsyncBundle(UInt(new RFlit(axiP).getWidth.W), asyncP))
   }
 
   class ExtAxiBundle(val params: AxiParams) extends Bundle {

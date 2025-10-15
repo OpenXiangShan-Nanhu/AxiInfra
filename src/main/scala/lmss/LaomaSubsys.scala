@@ -26,8 +26,8 @@ class LaomaSubsys(implicit p:Parameters) extends RawModule with ImplicitClock wi
   val slvs = for((sp, i) <- lmssP.slvp.zipWithIndex) yield noPrefix {
     val sfx = if(sp.name != "") sp.name else s"$i"
     val s_axi = IO(Flipped(new ExtAxiBundle(sp.axip)))
-    val s_clk = sp.aysnc.map(_ => IO(Input(Clock())))
-    val s_rst = sp.aysnc.map(_ => IO(Input(AsyncReset())))
+    val s_clk = sp.async.map(_ => IO(Input(Clock())))
+    val s_rst = sp.async.map(_ => IO(Input(AsyncReset())))
     val adpt = Module(new AxiInPortAdapter(sp))
     adpt.s_clk := s_clk.getOrElse(clock)
     adpt.s_rst := s_rst.getOrElse(reset)
@@ -59,8 +59,8 @@ class LaomaSubsys(implicit p:Parameters) extends RawModule with ImplicitClock wi
     val sfx = if(pp.name != "") pp.name else s"$i"
     val adpt = Module(new AxiOutPortAdapter(a.params, pp))
     val m_axi = IO(new ExtAxiBundle(adpt.m_axi.params))
-    val m_clk = pp.aysnc.map(_ => IO(Input(Clock())))
-    val m_rst = pp.aysnc.map(_ => IO(Input(AsyncReset())))
+    val m_clk = pp.async.map(_ => IO(Input(Clock())))
+    val m_rst = pp.async.map(_ => IO(Input(AsyncReset())))
     adpt.s_clk := clock
     adpt.s_rst := reset
     adpt.m_clk := m_clk.getOrElse(clock)

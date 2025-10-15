@@ -17,14 +17,14 @@ class AxiInPortAdapter(port:PortParams)(implicit p:Parameters) extends RawModule
   val m_clk = IO(Input(Clock()))
   val m_rst = IO(Input(AsyncReset()))
 
-  private val cdc = port.aysnc.isDefined
+  private val cdc = port.async.isDefined
   private val pipe = withClockAndReset(s_clk, s_rst) { Module(new AxiBufferChain(inP, port.pipe)) }
   pipe.io.in <> s_axi
 
   if(port.axip.dataBits > p(LmssParamsKey).internalDataBits) noPrefix {
     val cvt = withClockAndReset(s_clk, s_rst) { Module(new AxiWideToNarrow(inP, outP, port.outstanding)) }
-    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(outP, port.aysnc.get))) }
-    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(outP, port.aysnc.get))) }
+    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(outP, port.async.get))) }
+    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(outP, port.async.get))) }
     cvt.suggestName("cvt")
     asyncSrc.map(_.suggestName("async_src"))
     asycnSink.map(_.suggestName("async_sink"))
@@ -37,8 +37,8 @@ class AxiInPortAdapter(port:PortParams)(implicit p:Parameters) extends RawModule
       m_axi <> cvt.io.slv
     }
   } else if(port.axip.dataBits < p(LmssParamsKey).internalDataBits) noPrefix {
-    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(inP, port.aysnc.get))) }
-    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(inP, port.aysnc.get))) }
+    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(inP, port.async.get))) }
+    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(inP, port.async.get))) }
     val cvt = withClockAndReset(m_clk, m_rst) { Module(new AxiNarrowToWide(inP, outP, port.outstanding)) }
     cvt.suggestName("cvt")
     asyncSrc.map(_.suggestName("async_src"))
@@ -53,8 +53,8 @@ class AxiInPortAdapter(port:PortParams)(implicit p:Parameters) extends RawModule
       m_axi <> cvt.io.slv
     }
   } else {
-    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(inP, port.aysnc.get))) }
-    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(inP, port.aysnc.get))) }
+    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(inP, port.async.get))) }
+    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(inP, port.async.get))) }
     asyncSrc.map(_.suggestName("async_src"))
     asycnSink.map(_.suggestName("async_sink"))
     if(cdc) {
@@ -79,14 +79,14 @@ class AxiOutPortAdapter(axiP:AxiParams, port:PortParams) extends RawModule {
   val m_clk = IO(Input(Clock()))
   val m_rst = IO(Input(AsyncReset()))
 
-  private val cdc = port.aysnc.isDefined
+  private val cdc = port.async.isDefined
   private val pipe = withClockAndReset(m_clk, m_rst) { Module(new AxiBufferChain(outP, port.pipe)) }
   m_axi <> pipe.io.out
 
   if(axiP.dataBits > port.axip.dataBits) noPrefix {
     val cvt = withClockAndReset(s_clk, s_rst) { Module(new AxiWideToNarrow(inP, outP, port.outstanding)) }
-    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(outP, port.aysnc.get))) }
-    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(outP, port.aysnc.get))) }
+    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(outP, port.async.get))) }
+    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(outP, port.async.get))) }
     cvt.suggestName("cvt")
     asyncSrc.map(_.suggestName("async_src"))
     asycnSink.map(_.suggestName("async_sink"))
@@ -99,8 +99,8 @@ class AxiOutPortAdapter(axiP:AxiParams, port:PortParams) extends RawModule {
       pipe.io.in <> cvt.io.slv
     }
   } else if(axiP.dataBits < port.axip.dataBits) noPrefix {
-    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(inP, port.aysnc.get))) }
-    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(inP, port.aysnc.get))) }
+    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(inP, port.async.get))) }
+    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(inP, port.async.get))) }
     val cvt = withClockAndReset(m_clk, m_rst) { Module(new AxiNarrowToWide(inP, outP, port.outstanding)) }
     cvt.suggestName("cvt")
     asyncSrc.map(_.suggestName("async_src"))
@@ -115,8 +115,8 @@ class AxiOutPortAdapter(axiP:AxiParams, port:PortParams) extends RawModule {
       pipe.io.in <> cvt.io.slv
     }
   } else {
-    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(inP, port.aysnc.get))) }
-    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(inP, port.aysnc.get))) }
+    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(inP, port.async.get))) }
+    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(inP, port.async.get))) }
     asyncSrc.map(_.suggestName("async_src"))
     asycnSink.map(_.suggestName("async_sink"))
     if(cdc) {
