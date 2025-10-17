@@ -44,10 +44,10 @@ class AxiWideToNarrow(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   }
 
   private val lenShift = io.mst.aw.bits.size - maxSlvSize.U
-  private val oriLen = io.mst.aw.bits.len +& 1.U
+  private val oriAwLen = io.mst.aw.bits.len +& 1.U
   when(io.mst.aw.bits.size > maxSlvSize.U) {
     io.slv.aw.bits.size := maxSlvSize.U
-    io.slv.aw.bits.len := (oriLen << lenShift).asUInt - 1.U
+    io.slv.aw.bits.len := (oriAwLen << lenShift).asUInt - 1.U
   }
 
   io.mst.w.ready := awvld && Cat(wq.io.enq.map(_.ready)).andR
@@ -84,9 +84,10 @@ class AxiWideToNarrow(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
     }
   }
 
+  private val oriArLen = io.mst.aw.bits.len +& 1.U
   when(io.mst.ar.bits.size > maxSlvSize.U) {
     io.slv.ar.bits.size := maxSlvSize.U
-    io.slv.ar.bits.len := (oriLen << lenShift).asUInt - 1.U
+    io.slv.ar.bits.len := (oriArLen << lenShift).asUInt - 1.U
   }
 
   private val rwa = io.slv.r.bits.id(log2Ceil(buffer) - 1, 0)
