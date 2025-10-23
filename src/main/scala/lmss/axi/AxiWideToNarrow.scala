@@ -4,6 +4,7 @@ import chisel3._
 import chisel3.util._
 import xs.utils.PickOneLow
 import xs.utils.queue.MimoQueue
+import chisel3.experimental.noPrefix
 
 class AxiWideToNarrow(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) extends Module {
   override val desiredName = s"AxiWidthCvt${mstParams.dataBits}To${slvParams.dataBits}"
@@ -18,14 +19,16 @@ class AxiWideToNarrow(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   private val maxSlvSize = log2Ceil(sdw / 8)
 
   private val awvld = RegInit(false.B)
-  private val awinfo = Reg(new AxiWidthCvtBundle(mstParams))
+  private val awinfo = Reg(new AxiWidthWCvtBundle(mstParams))
   private val wq = Module(new MimoQueue(new WFlit(slvParams), seg, 1, buffer * seg, false))
 
   private val arvld = RegInit(VecInit(Seq.fill(buffer)(false.B)))
-  private val arinfo = Reg(Vec(buffer, new AxiWidthCvtBundle(mstParams)))
+  private val rvld  = RegInit(VecInit(Seq.fill(buffer)(false.B)))
+  private val arinfo = Reg(Vec(buffer, new AxiWidthRCvtBundle(mstParams, buffer)))
   private val mrgMskVec = Reg(Vec(buffer, Vec(seg, Bool())))
   private val rmem = Mem(buffer, Vec(seg, UInt(sdw.W)))
-  private val rq = Module(new Queue(UInt(slvParams.idBits.W), 1, pipe = true))
+  private val rq = Module(new Queue(UInt(log2Ceil(buffer).W), 1, pipe = true))
+  private val rlsq = Module(new Queue(UInt(log2Ceil(buffer).W), 1, pipe = true))
 
 
   // Write Splitting
@@ -43,11 +46,11 @@ class AxiWideToNarrow(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
     awinfo := io.mst.aw.bits
   }
 
-  private val lenShift = io.mst.aw.bits.size - maxSlvSize.U
+  private val wlenShift = io.mst.aw.bits.size - maxSlvSize.U
   private val oriAwLen = io.mst.aw.bits.len +& 1.U
   when(io.mst.aw.bits.size > maxSlvSize.U) {
     io.slv.aw.bits.size := maxSlvSize.U
-    io.slv.aw.bits.len := (oriAwLen << lenShift).asUInt - 1.U
+    io.slv.aw.bits.len := (oriAwLen << wlenShift).asUInt - 1.U
   }
 
   io.mst.w.ready := awvld && Cat(wq.io.enq.map(_.ready)).andR
@@ -67,32 +70,69 @@ class AxiWideToNarrow(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   io.mst.b <> io.slv.b
 
   // Read Merging
-  private val arsel = PickOneLow(arvld)
+  private val arsel      = PickOneLow(arvld)
+  private val slvHitVec  = Wire(Vec(buffer, Bool()))
+  private val nidCalcVec = Wire(Vec(buffer, Bool()))
+  private val rawNid     = PopCount(nidCalcVec)
+  private val cncrtWkVld = io.slv.r.fire && io.mst.ar.fire && io.slv.r.bits._last && io.mst.ar.bits.id === io.slv.r.bits.id
+  private val cncrtWkVldReg = RegNext(cncrtWkVld)
+  private val cncrtWkEtrReg = RegEnable(arsel.bits, cncrtWkVld)
+
   io.slv.ar.valid := io.mst.ar.valid && arsel.valid
   io.slv.ar.bits := io.mst.ar.bits
-  io.slv.ar.bits.id := OHToUInt(arsel.bits)
   io.mst.ar.ready := io.slv.ar.ready && arsel.valid
 
-  for(i <- arvld.indices) {
-    when(io.mst.ar.fire && arsel.bits(i)) {
+  for(i <- arvld.indices) noPrefix {
+    val rFireMstHit = WireInit(io.mst.r.valid && io.mst.r.ready && io.mst.r.bits.id === arinfo(i).id && arvld(i))
+    rFireMstHit.suggestName(s"r_fire_mst_hit_$i")
+    val rFireSlvHit = WireInit(io.slv.r.fire && io.slv.r.bits.id === arinfo(i).id && rvld(i))
+    rFireSlvHit.suggestName(s"r_fire_slv_hit_$i")
+    val arFireHit   = WireInit(io.mst.ar.fire && arsel.bits(i))
+    arFireHit.suggestName(s"ar_fire_hit_$i")
+
+    when(arFireHit) {
       arvld(i) := true.B
-    }.elsewhen(io.mst.r.fire && io.mst.r.bits.id === arinfo(i).id && io.mst.r.bits._last && arvld(i)) {
+    }.elsewhen(rlsq.io.deq.fire && rlsq.io.deq.bits === i.U) {
       arvld(i) := false.B
+      assert(arinfo(i).nid === 0.U)
     }
-    when(io.mst.ar.fire && arsel.bits(i)) {
-      arinfo(i) := io.mst.ar.bits
+
+    when(arFireHit) {
+      rvld(i)  := true.B
+    }.elsewhen(rFireSlvHit && io.slv.r.bits._last && arinfo(i).nid === 0.U) {
+      rvld(i)  := false.B
+      assert(arvld(i), s"rvld but arvld is false in vec $i")
     }
+
+    when(arFireHit) {
+      arinfo(i).size := io.mst.ar.bits.size
+      arinfo(i).id   := io.mst.ar.bits.id
+    }
+    when(arFireHit) {
+      arinfo(i).nid  := rawNid
+    }.elsewhen((arinfo(i).nid =/= 0.U && rFireSlvHit && io.slv.r.bits._last) && (cncrtWkEtrReg(i) && cncrtWkVldReg)) {
+      arinfo(i).nid  := arinfo(i).nid - 2.U
+    }.elsewhen((arinfo(i).nid =/= 0.U && rFireSlvHit && io.slv.r.bits._last) || (cncrtWkEtrReg(i) && cncrtWkVldReg)) {
+      arinfo(i).nid  := arinfo(i).nid - 1.U
+    }
+
+
+    nidCalcVec(i)  := rvld(i) && arinfo(i).id === io.mst.ar.bits.id
+    slvHitVec(i)   := rvld(i) && arinfo(i).id === io.slv.r.bits.id && arinfo(i).nid === 0.U
   }
 
-  private val oriArLen = io.mst.aw.bits.len +& 1.U
+  private val oriArLen = io.mst.ar.bits.len +& 1.U
+  private val rlenShift = io.mst.ar.bits.size - maxSlvSize.U
+
   when(io.mst.ar.bits.size > maxSlvSize.U) {
     io.slv.ar.bits.size := maxSlvSize.U
-    io.slv.ar.bits.len := (oriArLen << lenShift).asUInt - 1.U
+    io.slv.ar.bits.len := (oriArLen << rlenShift).asUInt - 1.U
   }
 
-  private val rwa = io.slv.r.bits.id(log2Ceil(buffer) - 1, 0)
+  private val rwa = OHToUInt(slvHitVec)
   private val rwd = VecInit(Seq.fill(seg)(io.slv.r.bits.data))
   private val rwm = mrgMskVec(rwa)
+  
   for(i <- mrgMskVec.indices) {
     for(j <- mrgMskVec(i).indices) {
       when(io.mst.ar.fire && arsel.bits(i)) {
@@ -108,13 +148,15 @@ class AxiWideToNarrow(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
 
   when(io.slv.r.fire) {
     rmem.write(rwa, rwd, rwm)
+    assert(PopCount(slvHitVec) === 1.U, p"None or more than one hit, slvHitOH is ${Binary(slvHitVec.asUInt)}")
   }
 
-  private val rid = RegEnable(arinfo(rwa).id, io.slv.r.fire)
-  private val rlast = RegEnable(io.slv.r.bits._last, io.slv.r.fire)
-  private val rresp = RegEnable(io.slv.r.bits.resp, io.slv.r.fire)
-  private val ruser = RegEnable(io.slv.r.bits.user, io.slv.r.fire)
-  private val mergeDone = mrgMskVec(rwa).last
+  private val rid       = RegEnable(io.slv.r.bits.id, io.slv.r.fire)
+  private val rlast     = RegEnable(io.slv.r.bits._last, io.slv.r.fire)
+  private val rresp     = RegEnable(io.slv.r.bits.resp, io.slv.r.fire)
+  private val ruser     = RegEnable(io.slv.r.bits.user, io.slv.r.fire)
+  private val mergeDone = RegEnable(mrgMskVec(rwa).last && (arinfo(rwa).size > maxSlvSize.U), io.slv.r.fire)
+  private val noMrgFire = RegEnable(arinfo(rwa).size <= maxSlvSize.U, io.slv.r.fire)
 
   io.mst.r.bits.id := rid
   io.mst.r.bits.data := rmem(rq.io.deq.bits(log2Ceil(buffer) - 1, 0)).asUInt
@@ -122,9 +164,12 @@ class AxiWideToNarrow(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   io.mst.r.bits.user := ruser
   io.mst.r.bits.last := rlast
 
-  io.mst.r.valid := rq.io.deq.valid && (mergeDone || rlast)
-  rq.io.deq.ready := rq.io.deq.valid && Mux(io.mst.r.ready, true.B, !mergeDone && !rlast)
-  rq.io.enq.valid := io.slv.r.valid
-  rq.io.enq.bits := io.slv.r.bits.id
-  io.slv.r.ready := rq.io.enq.ready
+  io.mst.r.valid := rq.io.deq.valid && (mergeDone || rlast || noMrgFire)
+  rq.io.deq.ready := rq.io.deq.valid && Mux(io.mst.r.ready, true.B, !mergeDone && !rlast && !noMrgFire)
+  rq.io.enq.valid := io.slv.r.fire
+  rq.io.enq.bits := rwa
+  rlsq.io.enq.valid := io.slv.r.fire && io.slv.r.bits._last
+  rlsq.io.enq.bits  := OHToUInt(slvHitVec)
+  rlsq.io.deq.ready := io.mst.r.bits._last && io.mst.r.fire
+  io.slv.r.ready := rq.io.enq.ready && rlsq.io.enq.ready
 }

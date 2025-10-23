@@ -3,8 +3,9 @@ package lmss.axi
 import chisel3._
 import chisel3.util._
 import xs.utils.PickOneLow
+import chisel3.experimental.noPrefix
 
-class AxiWidthCvtBundle(axiP: AxiParams) extends Bundle {
+class AxiWidthWCvtBundle(axiP: AxiParams) extends Bundle {
   val addr = UInt(axiP.addrBits.W)
   val size = UInt(axiP.sizeBits.W)
   val id = UInt(axiP.idBits.W)
@@ -21,6 +22,13 @@ class AxiWidthCvtBundle(axiP: AxiParams) extends Bundle {
   }
 }
 
+class AxiWidthRCvtBundle(axiP: AxiParams, outstanding: Int) extends Bundle {
+  val addr = UInt(axiP.addrBits.W)
+  val size = UInt(axiP.sizeBits.W)
+  val id = UInt(axiP.idBits.W)
+  val nid = UInt(log2Ceil(outstanding).W)
+}
+
 class AxiNarrowToWide(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) extends Module {
   override val desiredName = s"AxiWidthCvt${mstParams.dataBits}To${slvParams.dataBits}"
   val io = IO(new Bundle {
@@ -30,23 +38,54 @@ class AxiNarrowToWide(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   private val mdw = mstParams.dataBits
   private val sdw = slvParams.dataBits
   private val seg = sdw / mdw
-  private val awq = Module(new Queue(new AxiWidthCvtBundle(mstParams), entries = buffer))
+  private val awq = Module(new Queue(new AxiWidthWCvtBundle(mstParams), entries = buffer))
   private val wq = Module(new Queue(new WFlit(mstParams), entries = 2))
+  private val rq = Module(new Queue(new RFlit(slvParams), entries = 1, pipe = true))
   private val arvld = RegInit(VecInit(Seq.fill(buffer)(false.B)))
-  private val arinfo = Reg(Vec(buffer, new AxiWidthCvtBundle(mstParams)))
+  private val arinfo = Reg(Vec(buffer, new AxiWidthRCvtBundle(mstParams, buffer)))
   private val arsel = PickOneLow(arvld)
+  private val infoSelOH = Wire(Vec(buffer, Bool()))
+  private val nidCalcVec = Wire(Vec(buffer, Bool()))
+  private val rawNid = PopCount(nidCalcVec)
+  private val cncrtWkVld = io.mst.r.fire && io.mst.ar.fire && io.mst.r.bits._last && io.mst.r.bits.id === io.mst.ar.bits.id
+  private val cncrtWkVldReg = RegNext(cncrtWkVld)
+  private val cncrtWkEtrReg = RegEnable(arsel.bits, cncrtWkVld)
   require(mdw <= sdw)
   require(slvParams.idBits >= log2Ceil(buffer).max(mstParams.idBits))
 
-  for(i <- arvld.indices) {
-    when(io.mst.ar.fire && arsel.bits(i)) {
+  for(i <- arvld.indices) noPrefix {
+    val rFireMayHit = WireInit(io.mst.r.valid && io.mst.r.ready && io.mst.r.bits.id === arinfo(i).id && arvld(i))
+    rFireMayHit.suggestName(s"r_fire_may_hit_$i")
+    val arFireHit = WireInit(io.mst.ar.fire && arsel.bits(i))
+    arFireHit.suggestName(s"ar_fire_hit_$i")
+
+    when(arFireHit) {
       arvld(i) := true.B
-    }.elsewhen(io.mst.r.fire && io.mst.r.bits.id === arinfo(i).id && io.mst.r.bits._last && arvld(i)) {
+    }.elsewhen(rFireMayHit && io.mst.r.bits._last && arinfo(i).nid === 0.U) {
       arvld(i) := false.B
     }
     when(io.mst.ar.fire && arsel.bits(i)) {
       arinfo(i) := io.mst.ar.bits
     }
+    when(arFireHit) {
+      arinfo(i).size  := io.mst.ar.bits.size
+      arinfo(i).id    := io.mst.ar.bits.id
+    }
+    when(arFireHit) {
+      arinfo(i).nid   := rawNid
+    }.elsewhen((cncrtWkVldReg && cncrtWkEtrReg(i)) && (rFireMayHit && io.mst.r.bits._last && arinfo(i).nid =/= 0.U)) {
+      arinfo(i).nid   := arinfo(i).nid - 2.U
+    }.elsewhen((cncrtWkVldReg && cncrtWkEtrReg(i)) || (rFireMayHit && io.mst.r.bits._last && arinfo(i).nid =/= 0.U)) {
+      arinfo(i).nid   := arinfo(i).nid - 1.U
+    }
+    when(arFireHit) {
+      arinfo(i).addr := io.mst.ar.bits.addr
+    }.elsewhen(rFireMayHit && arinfo(i).nid === 0.U) {
+      arinfo(i).addr := arinfo(i).addr + (i.U << arinfo(i).size)
+    }
+
+    infoSelOH(i)     := arvld(i) && arinfo(i).id === io.mst.r.bits.id && arinfo(i).nid === 0.U
+    nidCalcVec(i)    := arvld(i) && arinfo(i).id === io.mst.ar.bits.id
   }
   //AW Channel Connection
   awq.io.enq.valid := io.mst.aw.valid && io.slv.aw.ready
@@ -58,7 +97,6 @@ class AxiNarrowToWide(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   //AR Channel Connection
   io.slv.ar.valid := io.mst.ar.valid && arsel.valid
   io.slv.ar.bits := io.mst.ar.bits
-  io.slv.ar.bits.id := OHToUInt(arsel.bits)
   io.mst.ar.ready := io.slv.ar.ready && arsel.valid
 
   //W Channel Connection
@@ -81,9 +119,12 @@ class AxiNarrowToWide(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   private val infoSel = arinfo(io.slv.r.bits.id(log2Ceil(buffer) - 1, 0))
   private val raddrcvt = if(sdw > mdw) infoSel.addr(log2Ceil(sdw / 8) - 1, log2Ceil(mdw / 8)) else 0.U
   private val rdata = io.slv.r.bits.data.asTypeOf(Vec(seg, UInt(mdw.W)))
-  io.mst.r.valid := io.slv.r.valid
-  io.mst.r.bits := io.slv.r.bits
+
+  rq.io.enq <> io.slv.r
+  io.mst.r  <> rq.io.deq
   io.mst.r.bits.data := rdata(raddrcvt)
-  io.mst.r.bits.id := infoSel.id
-  io.slv.r.ready := io.mst.r.ready
+
+  when(io.mst.r.fire) {
+    assert(PopCount(infoSelOH) === 1.U, s"Multiple R entries are hit!")
+  }
 }
