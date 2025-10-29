@@ -23,12 +23,15 @@ class AxiInPortAdapter(port:PortParams)(implicit p:Parameters) extends RawModule
 
   if(port.axip.dataBits > p(LmssParamsKey).internalDataBits) noPrefix {
     val cvt = withClockAndReset(s_clk, s_rst) { Module(new AxiWideToNarrow(inP, outP, port.outstanding)) }
+    val reorder = withClockAndReset(m_clk, m_rst) { Module(new AxiReorder(inP, port.outstanding * 2))}
     val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(outP, port.async.get))) }
     val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(outP, port.async.get))) }
     cvt.suggestName("cvt")
+    reorder.suggestName("reorder")
     asyncSrc.map(_.suggestName("async_src"))
     asycnSink.map(_.suggestName("async_sink"))
-    cvt.io.mst <> pipe.io.out
+    reorder.io.mst <> pipe.io.out
+    cvt.io.mst <> reorder.io.slv
     if(cdc) {
       asyncSrc.get.s_axi <> cvt.io.slv
       asycnSink.get.async <> asyncSrc.get.async
@@ -39,30 +42,36 @@ class AxiInPortAdapter(port:PortParams)(implicit p:Parameters) extends RawModule
   } else if(port.axip.dataBits < p(LmssParamsKey).internalDataBits) noPrefix {
     val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(inP, port.async.get))) }
     val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(inP, port.async.get))) }
+    val reorder = withClockAndReset(m_clk, m_rst) { Module(new AxiReorder(inP, port.outstanding * 2))}
     val cvt = withClockAndReset(m_clk, m_rst) { Module(new AxiNarrowToWide(inP, outP, port.outstanding)) }
     cvt.suggestName("cvt")
+    reorder.suggestName("reorder")
     asyncSrc.map(_.suggestName("async_src"))
     asycnSink.map(_.suggestName("async_sink"))
     if(cdc) {
       asyncSrc.get.s_axi <> s_axi
       asycnSink.get.async <> asyncSrc.get.async
-      cvt.io.mst <> asycnSink.get.m_axi
+      reorder.io.mst <> asycnSink.get.m_axi
+      cvt.io.mst <> reorder.io.slv
       m_axi <> cvt.io.slv
     } else {
-      cvt.io.mst <> s_axi
+      reorder.io.mst <> s_axi
+      cvt.io.mst <> reorder.io.slv
       m_axi <> cvt.io.slv
     }
   } else {
     val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(inP, port.async.get))) }
     val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(inP, port.async.get))) }
+    val reorder = withClockAndReset(m_clk, m_rst) { Module(new AxiReorder(inP, port.outstanding * 2))}
     asyncSrc.map(_.suggestName("async_src"))
     asycnSink.map(_.suggestName("async_sink"))
+    reorder.io.mst <> pipe.io.out
     if(cdc) {
-      asyncSrc.get.s_axi <> pipe.io.out
+      asyncSrc.get.s_axi <> reorder.io.slv
       asycnSink.get.async <> asyncSrc.get.async
       m_axi <> asycnSink.get.m_axi
     } else {
-      m_axi <> pipe.io.out
+      m_axi <> reorder.io.slv
     }
   }
 }

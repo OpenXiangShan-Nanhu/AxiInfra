@@ -83,8 +83,6 @@ class AxiWideToNarrow(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   io.mst.ar.ready := io.slv.ar.ready && arsel.valid
 
   for(i <- arvld.indices) noPrefix {
-    val rFireMstHit = WireInit(io.mst.r.valid && io.mst.r.ready && io.mst.r.bits.id === arinfo(i).id && arvld(i))
-    rFireMstHit.suggestName(s"r_fire_mst_hit_$i")
     val rFireSlvHit = WireInit(io.slv.r.fire && io.slv.r.bits.id === arinfo(i).id && rvld(i))
     rFireSlvHit.suggestName(s"r_fire_slv_hit_$i")
     val arFireHit   = WireInit(io.mst.ar.fire && arsel.bits(i))
