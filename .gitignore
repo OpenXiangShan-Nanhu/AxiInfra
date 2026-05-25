@@ -11,3 +11,5 @@ build
 .metals
 .bloop
 tmp
+
+.xmake
