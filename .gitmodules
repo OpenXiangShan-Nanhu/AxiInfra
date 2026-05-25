@@ -13,3 +13,6 @@
 [submodule "dep/diplomacy"]
 	path = dep/diplomacy
 	url = https://github.com/chipsalliance/diplomacy.git
+[submodule "dep/xs-utils"]
+	path = dep/xs-utils
+	url = https://github.com/OpenXiangShan-Nanhu/xs-utils
