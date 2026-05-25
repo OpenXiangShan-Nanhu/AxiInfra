@@ -31,8 +31,6 @@ task("init", function()
     on_run(function()
         os.cd(os.scriptdir())
         os.exec("git submodule update --init")
-        os.cd(path.join(os.scriptdir(), "rocket-chip", "dependencies"))
-        os.exec("git submodule update --init cde hardfloat diplomacy")
     end)
     set_menu {
         options = {} -- If no options required, just set it to {} and DO NOT remove this line. (`options` key is required)
