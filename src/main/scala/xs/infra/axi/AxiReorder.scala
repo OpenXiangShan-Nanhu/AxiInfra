@@ -15,7 +15,7 @@ class AxiARInfoBundle(axiP: AxiParams, buffer: Int) extends Bundle {
   val haveSendAR = Bool()
 }
 class AxiAWInfoBundle(axiP: AxiParams, buffer: Int) extends Bundle {
-  val id         = UInt(log2Ceil(axiP.idBits).W)
+  val id         = UInt(axiP.idBits.W)
   val nid        = UInt(log2Ceil(buffer).W)
   val haveSendAW = Bool()
 }
@@ -105,7 +105,7 @@ class AxiReorder(axiParams: AxiParams, buffer: Int) extends Module {
   for(i <- wvld.indices) noPrefix {
     val awMstFireHit = WireInit(io.mst.aw.fire && awsel.bits(i))
     awMstFireHit.suggestName(s"aw_mst_fire_hit_$i")
-    val bFireSlvHit = WireInit(io.slv.b.fire && arinfo(slvRHitEtr).bits.id === arinfo(i).bits.id && wvld(i))
+    val bFireSlvHit = WireInit(io.slv.b.fire && arinfo(slvBHitEtr).bits.id === awinfo(i).id && wvld(i))
     bFireSlvHit.suggestName(s"b_fire_slv_hit_$i")
     val awSlvFireHit = WireInit(io.slv.aw.fire && slvAWHitEtr === i.U)
     awSlvFireHit.suggestName(s"aw_slv_fire_hit_$i")
