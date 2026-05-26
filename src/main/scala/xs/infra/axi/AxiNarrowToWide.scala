@@ -150,9 +150,9 @@ class AxiNarrowToWide(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   io.mst.b <> io.slv.b
 
   //R Channel Connection
-  private val infoSel = arinfo(io.slv.r.bits.id(log2Ceil(buffer) - 1, 0))
+  private val infoSel = Mux1H(infoSelOH, arinfo)
   private val raddrcvt = if(sdw > mdw) infoSel.addrSfx(log2Ceil(sdw / 8) - 1, log2Ceil(mdw / 8)) else 0.U
-  private val rdata = io.slv.r.bits.data.asTypeOf(Vec(seg, UInt(mdw.W)))
+  private val rdata = rq.io.deq.bits.data.asTypeOf(Vec(seg, UInt(mdw.W)))
 
   rq.io.enq <> io.slv.r
   io.mst.r  <> rq.io.deq

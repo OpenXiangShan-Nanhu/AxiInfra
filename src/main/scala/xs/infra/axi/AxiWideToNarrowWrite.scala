@@ -277,14 +277,14 @@ class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:In
   io.uW.ready              := wLastCtlQ.io.deq.valid && wCtrlQ.io.deq.valid && ((buffer * seg).U -  wq.io.count) >= PopCount(enqv)
   io.dAw.valid             := !isEmpty(wHeadPtr, wTailPtr) && wLastCtlQ.io.enq.ready
   io.dAw.bits              := Mux(awTailInfo.awinfo.size > maxSlvSize.U, slvAwBits, awTailInfo.awinfo)
-  io.dW.valid              := wq.io.deq.head.valid
+  io.dW.valid              := wq.io.deq.head.valid && wLastCtlQ.io.deq.valid
   io.dW.bits               := wq.io.deq.head.bits
   io.dW.bits.last          := wCounter === wLastCtlQ.io.deq.bits && wLastCtlQ.io.deq.valid
   io.uB.valid              := io.dB.valid && binfo(OHToUInt(bHitVec)).rcvBNum === 1.U
   io.uB.bits               := io.dB.bits
   io.dB.ready              := io.uB.ready
 
-  wq.io.deq.head.ready     := io.dW.ready
+  wq.io.deq.head.ready     := io.dW.ready && wLastCtlQ.io.deq.valid
 
 /* 
  * Assertion
