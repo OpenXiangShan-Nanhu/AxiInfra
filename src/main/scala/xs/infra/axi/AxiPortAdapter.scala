@@ -7,9 +7,20 @@ import chisel3._
 import chisel3.experimental.noPrefix
 import org.chipsalliance.cde.config.Parameters
 
-class AxiInPortAdapter(port:PortParams, outDataBits:Int)(implicit p:Parameters) extends RawModule {
+/**
+  * Slave-side port adapter: external master (s_axi @ s_clk) -> internal (m_axi @ m_clk).
+  *
+  * Clocking rules (CDC on the narrow side, same as AxiOutPortAdapter):
+  *   W2N: pipe + reorder + convert on s_clk, then CDC
+  *   N2W: pipe on s_clk, CDC, then reorder + convert on m_clk
+  *   same: pipe + reorder on s_clk, optional CDC
+  * When !cdc, s_clk and m_clk must be the same clock.
+  */
+class AxiInPortAdapter(port: PortParams, outDataBits: Int)(implicit p: Parameters) extends RawModule {
   private val inP = port.axip
   private val outP = port.axip.copy(dataBits = outDataBits)
+  private val cvtBuffer = math.max(port.outstanding, 2)
+  private val reorderDepth = port.outstanding * 2
 
   val s_axi = IO(Flipped(new ExtAxiBundle(inP)))
   val s_clk = IO(Input(Clock()))
@@ -23,53 +34,63 @@ class AxiInPortAdapter(port:PortParams, outDataBits:Int)(implicit p:Parameters) 
   private val pipe = withClockAndReset(s_clk, s_rst) { Module(new AxiBufferChain(inP, port.pipe)) }
   pipe.io.in <> s_axi
 
-  if(port.axip.dataBits > outDataBits) noPrefix {
-    val cvt = withClockAndReset(s_clk, s_rst) { Module(new AxiWideToNarrow(inP, outP, port.outstanding)) }
-    val reorder = withClockAndReset(m_clk, m_rst) { Module(new AxiReorder(inP, port.outstanding * 2))}
-    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(outP, port.async.get))) }
-    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(outP, port.async.get))) }
-    cvt.suggestName("cvt")
+  if (port.axip.dataBits > outDataBits) noPrefix {
+    // wide -> narrow: all work on s_clk (wide then convert), CDC after convert (narrow)
+    val reorder = withClockAndReset(s_clk, s_rst) { Module(new AxiReorder(inP, reorderDepth)) }
+    val cvt = withClockAndReset(s_clk, s_rst) { Module(new AxiWideToNarrow(inP, outP, cvtBuffer)) }
     reorder.suggestName("reorder")
-    asyncSrc.map(_.suggestName("async_src"))
-    asycnSink.map(_.suggestName("async_sink"))
+    cvt.suggestName("cvt")
     reorder.io.mst <> pipe.io.out
     cvt.io.mst <> reorder.io.slv
-    if(cdc) {
-      asyncSrc.get.s_axi <> cvt.io.slv
-      asycnSink.get.async <> asyncSrc.get.async
-      m_axi <> asycnSink.get.m_axi
+    if (cdc) {
+      val asyncSrc = withClockAndReset(s_clk, s_rst) { Module(new AxiAsyncSource(outP, port.async.get)) }
+      val asyncSink = withClockAndReset(m_clk, m_rst) { Module(new AxiAsyncSink(outP, port.async.get)) }
+      asyncSrc.suggestName("async_src")
+      asyncSink.suggestName("async_sink")
+      asyncSrc.s_axi <> cvt.io.slv
+      asyncSink.async <> asyncSrc.async
+      m_axi <> asyncSink.m_axi
     } else {
       m_axi <> cvt.io.slv
     }
-  } else if(port.axip.dataBits < outDataBits) noPrefix {
-    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(inP, port.async.get))) }
-    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(inP, port.async.get))) }
-    val reorder = withClockAndReset(m_clk, m_rst) { Module(new AxiReorder(inP, port.outstanding * 2))}
-    val cvt = withClockAndReset(m_clk, m_rst) { Module(new AxiNarrowToWide(inP, outP, port.outstanding)) }
-    cvt.suggestName("cvt")
-    reorder.suggestName("reorder")
-    asyncSrc.map(_.suggestName("async_src"))
-    asycnSink.map(_.suggestName("async_sink"))
-    reorder.io.mst <> pipe.io.out
-    cvt.io.mst <> reorder.io.slv
-    if(cdc) {
-      asyncSrc.get.s_axi <> cvt.io.slv
-      asycnSink.get.async <> asyncSrc.get.async
-      m_axi <> asycnSink.get.m_axi
+  } else if (port.axip.dataBits < outDataBits) noPrefix {
+    // narrow -> wide: CDC on narrow (s_clk), then reorder + convert on m_clk
+    if (cdc) {
+      val asyncSrc = withClockAndReset(s_clk, s_rst) { Module(new AxiAsyncSource(inP, port.async.get)) }
+      val asyncSink = withClockAndReset(m_clk, m_rst) { Module(new AxiAsyncSink(inP, port.async.get)) }
+      val reorder = withClockAndReset(m_clk, m_rst) { Module(new AxiReorder(inP, reorderDepth)) }
+      val cvt = withClockAndReset(m_clk, m_rst) { Module(new AxiNarrowToWide(inP, outP, cvtBuffer)) }
+      asyncSrc.suggestName("async_src")
+      asyncSink.suggestName("async_sink")
+      reorder.suggestName("reorder")
+      cvt.suggestName("cvt")
+      asyncSrc.s_axi <> pipe.io.out
+      asyncSink.async <> asyncSrc.async
+      reorder.io.mst <> asyncSink.m_axi
+      cvt.io.mst <> reorder.io.slv
+      m_axi <> cvt.io.slv
     } else {
+      val reorder = withClockAndReset(s_clk, s_rst) { Module(new AxiReorder(inP, reorderDepth)) }
+      val cvt = withClockAndReset(s_clk, s_rst) { Module(new AxiNarrowToWide(inP, outP, cvtBuffer)) }
+      reorder.suggestName("reorder")
+      cvt.suggestName("cvt")
+      reorder.io.mst <> pipe.io.out
+      cvt.io.mst <> reorder.io.slv
       m_axi <> cvt.io.slv
     }
   } else {
-    val asyncSrc = withClockAndReset(s_clk, s_rst) { Option.when(cdc)(Module(new AxiAsyncSource(inP, port.async.get))) }
-    val asycnSink = withClockAndReset(m_clk, m_rst) { Option.when(cdc)(Module(new AxiAsyncSink(inP, port.async.get))) }
-    val reorder = withClockAndReset(m_clk, m_rst) { Module(new AxiReorder(inP, port.outstanding * 2))}
-    asyncSrc.map(_.suggestName("async_src"))
-    asycnSink.map(_.suggestName("async_sink"))
+    // same data width: reorder on s_clk, optional CDC to m_clk
+    val reorder = withClockAndReset(s_clk, s_rst) { Module(new AxiReorder(inP, reorderDepth)) }
+    reorder.suggestName("reorder")
     reorder.io.mst <> pipe.io.out
-    if(cdc) {
-      asyncSrc.get.s_axi <> reorder.io.slv
-      asycnSink.get.async <> asyncSrc.get.async
-      m_axi <> asycnSink.get.m_axi
+    if (cdc) {
+      val asyncSrc = withClockAndReset(s_clk, s_rst) { Module(new AxiAsyncSource(inP, port.async.get)) }
+      val asyncSink = withClockAndReset(m_clk, m_rst) { Module(new AxiAsyncSink(inP, port.async.get)) }
+      asyncSrc.suggestName("async_src")
+      asyncSink.suggestName("async_sink")
+      asyncSrc.s_axi <> reorder.io.slv
+      asyncSink.async <> asyncSrc.async
+      m_axi <> asyncSink.m_axi
     } else {
       m_axi <> reorder.io.slv
     }
