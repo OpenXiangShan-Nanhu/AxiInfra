@@ -83,7 +83,8 @@ class AxiNarrowToWide(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   private val cncrtWkVldReg = RegNext(cncrtWkVld)
   private val cncrtWkEtrReg = RegEnable(arsel.bits, cncrtWkVld)
   require(mdw <= sdw)
-  require(slvParams.idBits >= log2Ceil(buffer).max(mstParams.idBits))
+  // Width converter does not remap AXI IDs; both sides must use the same id width.
+  require(mstParams.idBits == slvParams.idBits, "AxiNarrowToWide requires equal idBits")
 
   for(i <- arvld.indices) noPrefix {
     val rFireMayHit = WireInit(io.mst.r.valid && io.mst.r.ready && io.mst.r.bits.id === arinfo(i).id && arvld(i))

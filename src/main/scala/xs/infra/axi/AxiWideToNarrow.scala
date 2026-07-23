@@ -19,6 +19,8 @@ class AxiWideToNarrow(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   private val sdw = slvParams.dataBits
   private val seg = mdw / sdw
   require(sdw <= mdw)
+  // Width converter does not remap AXI IDs; both sides must use the same id width.
+  require(mstParams.idBits == slvParams.idBits, "AxiWideToNarrow requires equal idBits")
   private val maxSlvSize = log2Ceil(sdw / 8)
 
   private val readLogicCtrl  = Module(new AxiWideToNarrowRead(mstParams, slvParams, buffer))

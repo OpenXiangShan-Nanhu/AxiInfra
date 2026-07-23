@@ -30,3 +30,14 @@ object LmssGenerator extends App {
     ChiselGeneratorAnnotation(() => new AxiSubsysTop()(config))
   ))
 }
+
+/** Generate AxiBridgeCfg (CFG 桥, 1S×3M) top-level RTL. */
+object AxiBridgeCfgGenerator extends App {
+  chisel3.VerificationLayers.assertLayer = false
+  chisel3.VerificationLayers.coverLayer = false
+  chisel3.VerificationLayers.assumeLayer = false
+  val config = new AxiBridgeCfgConfig
+  (new ChiselStage).execute(args, Generator.firtoolOpts ++ Seq(
+    ChiselGeneratorAnnotation(() => new AxiBridgeCfg()(config))
+  ))
+}
