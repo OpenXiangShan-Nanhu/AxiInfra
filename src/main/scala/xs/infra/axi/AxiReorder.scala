@@ -11,12 +11,12 @@ import xs.utils.queue.FastQueue
 
 class AxiARInfoBundle(axiP: AxiParams, buffer: Int) extends Bundle {
   val bits       = new AxiBundle(axiP).ar.bits
-  val nid        = UInt(log2Ceil(buffer).W)
+  val nid        = UInt(log2Ceil(buffer + 1).W)
   val haveSendAR = Bool()
 }
 class AxiAWInfoBundle(axiP: AxiParams, buffer: Int) extends Bundle {
   val id         = UInt(axiP.idBits.W)
-  val nid        = UInt(log2Ceil(buffer).W)
+  val nid        = UInt(log2Ceil(buffer + 1).W)
   val haveSendAW = Bool()
 }
 
@@ -50,16 +50,22 @@ class AxiReorder(axiParams: AxiParams, buffer: Int) extends Module {
   private val slvARHitEtr = io.slv.ar.bits.id(log2Ceil(buffer) - 1, 0)
   private val slvAWHitEtr = io.slv.aw.bits.id(log2Ceil(buffer) - 1, 0)
 
-  private val nidRCalcVec = Wire(Vec(buffer, Bool()))
-  private val nidWCalcVec = Wire(Vec(buffer, Bool()))
-  private val rawRNid     = PopCount(nidRCalcVec)
-  private val rawWNid     = PopCount(nidWCalcVec)
-  private val rWkVld      = io.slv.r.fire && io.mst.ar.fire && io.slv.r.bits._last && io.mst.ar.bits.id === arinfo(slvRHitEtr).bits.id
-  private val rWkVldReg   = RegNext(rWkVld)
-  private val rWkEtrReg   = RegEnable(arsel.bits, rWkVld)
-  private val wWkVld      = io.slv.b.fire && io.mst.aw.fire && io.mst.aw.bits.id === awinfo(slvBHitEtr).id
-  private val wWkVldReg   = RegNext(wWkVld)
-  private val wWkEtrReg   = RegEnable(awsel.bits, wWkVld)
+  // Exclude an entry completed this cycle so a concurrent same-ID request sees
+  // the post-completion predecessor count, matching AxiFieldAdapter's nid logic.
+  private def rSameIdCount(id: UInt): UInt =
+    PopCount(VecInit(arinfo.zip(rvld).zipWithIndex.map { case ((entry, valid), i) =>
+      val live = valid && entry.bits.id === id
+      val done = io.slv.r.fire && io.slv.r.bits._last && slvRHitEtr === i.U
+      live && !done
+    }))
+
+  private def wSameIdCount(id: UInt): UInt =
+    PopCount(VecInit(awinfo.zip(wvld).zipWithIndex.map { case ((entry, valid), i) =>
+      val live = valid && entry.id === id
+      val done = io.slv.b.fire && slvBHitEtr === i.U
+      live && !done
+    }))
+
   private val awq         = Module(new Queue(new AxiAWEtrBundle(axiParams, buffer), entries = 1, pipe = true))
   private val wq          = Module(new FastQueue(UInt(log2Ceil(buffer).W), size = 2))
   private val wbitsq      = Module(new FastQueue(new AxiWEtrBundle(axiParams, buffer), size = 2))
@@ -87,18 +93,13 @@ class AxiReorder(axiParams: AxiParams, buffer: Int) extends Module {
       arinfo(i).haveSendAR := false.B
     }
     when(arMstFireHit) {
-      arinfo(i).nid := rawRNid
-    }.elsewhen((arinfo(i).nid =/= 0.U && rFireSlvHit && io.slv.r.bits._last) && (rWkVldReg && rWkEtrReg(i))) {
-      assert(arinfo(i).nid =/= 1.U && arinfo(i).nid =/= 0.U)
-      arinfo(i).nid := arinfo(i).nid - 2.U
-    }.elsewhen((arinfo(i).nid =/= 0.U && rFireSlvHit && io.slv.r.bits._last) || (rWkVldReg && rWkEtrReg(i))) {
-      assert(arinfo(i).nid =/= 0.U)
+      arinfo(i).nid := rSameIdCount(io.mst.ar.bits.id)
+    }.elsewhen(arinfo(i).nid =/= 0.U && rFireSlvHit && io.slv.r.bits._last) {
       arinfo(i).nid := arinfo(i).nid - 1.U
     }
     when(arSlvFireHit) {
       arinfo(i).haveSendAR := true.B
     }
-    nidRCalcVec(i)  := rvld(i) && arinfo(i).bits.id === io.mst.ar.bits.id
     arShouldSend(i) := rvld(i) && arinfo(i).nid === 0.U && !arinfo(i).haveSendAR
   }
 
@@ -119,11 +120,9 @@ class AxiReorder(axiParams: AxiParams, buffer: Int) extends Module {
       wvld(i) := false.B
     }
     when(awMstFireHit) {
-      awinfo(i).nid := rawWNid
+      awinfo(i).nid := wSameIdCount(io.mst.aw.bits.id)
       awinfo(i).id  := io.mst.aw.bits.id
-    }.elsewhen((awinfo(i).nid =/= 0.U && bFireSlvHit) && (wWkVldReg && wWkEtrReg(i))) {
-      awinfo(i).nid := awinfo(i).nid - 2.U
-    }.elsewhen((awinfo(i).nid =/= 0.U && bFireSlvHit) || (wWkVldReg && wWkEtrReg(i))) {
+    }.elsewhen(awinfo(i).nid =/= 0.U && bFireSlvHit) {
       awinfo(i).nid := awinfo(i).nid - 1.U
     }
     when(awMstFireHit) {
@@ -131,8 +130,6 @@ class AxiReorder(axiParams: AxiParams, buffer: Int) extends Module {
     }.elsewhen(awq.io.deq.fire && awq.io.deq.bits.entry === i.U) {
       awinfo(i).haveSendAW := true.B
     }
-
-    nidWCalcVec(i) := wvld(i) && awinfo(i).id === io.mst.aw.bits.id
   }
 
   // Round-robin among AR entries ready to send (RREncoder over ResetRRArbiter)
