@@ -280,9 +280,16 @@ class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:In
   io.dW.valid              := wq.io.deq.head.valid && wLastCtlQ.io.deq.valid
   io.dW.bits               := wq.io.deq.head.bits
   io.dW.bits.last          := wCounter === wLastCtlQ.io.deq.bits && wLastCtlQ.io.deq.valid
-  io.uB.valid              := io.dB.valid && binfo(OHToUInt(bHitVec)).rcvBNum === 1.U
+  // Intermediate dB (rcvBNum > 1) are absorbed locally; only the last B goes upstream.
+  // dB.ready must not depend on uB.ready for intermediate beats (avoids deadlock).
+  private val bHitAny = bHitVec.asUInt.orR
+  private val bIsLast = binfo(OHToUInt(bHitVec)).rcvBNum === 1.U
+  io.uB.valid              := io.dB.valid && bHitAny && bIsLast
   io.uB.bits               := io.dB.bits
-  io.dB.ready              := io.uB.ready
+  io.dB.ready              := Mux(io.dB.valid && bHitAny, Mux(bIsLast, io.uB.ready, true.B), false.B)
+  when(io.dB.valid) {
+    assert(bHitAny)
+  }
 
   wq.io.deq.head.ready     := io.dW.ready && wLastCtlQ.io.deq.valid
 

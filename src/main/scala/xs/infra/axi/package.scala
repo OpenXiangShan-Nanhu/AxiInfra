@@ -37,12 +37,19 @@ package object axi {
     base: Long = 0x0L,
     size: Long = 0x0L,
     intv: Long = 0x0L,
-    mask: Long = 0x0L
+    mask: Long = 0x0L,
+    /** Additional (base, size) address ranges OR-ed into the match. */
+    extras: Seq[(Long, Long)] = Seq()
   ) {
     def test(addr:UInt):Bool = {
-      val min = base.U
-      val max = (base + size).U
-      min <= addr && addr < max && (addr & mask.U) === intv.U
+      def rangeHit(b: Long, s: Long): Bool = {
+        val min = b.U
+        val max = (b + s).U
+        min <= addr && addr < max
+      }
+      val primary = rangeHit(base, size) && (addr & mask.U) === intv.U
+      val extraHit = extras.map { case (b, s) => rangeHit(b, s) }.foldLeft(false.B)(_ || _)
+      primary || extraHit
     }
   }
 
@@ -213,6 +220,20 @@ package object axi {
 
     def <>(that: AxiBundle): Unit = AxiUtils.extConn(this, that)
   }
+  /** Round-robin one-hot/index encoder, same usage style as VipEncoder.
+    * Built on ResetRRArbiter: enable advances the RR state when a request is chosen.
+    */
+  object RREncoder {
+    def apply(in: Seq[Bool], enable: Bool): UInt = {
+      val arb = Module(new xs.utils.ResetRRArbiter(UInt(0.W), in.size))
+      arb.io <> DontCare
+      arb.io.in.zip(in).foreach { case (a, v) => a.valid := v }
+      arb.io.out.ready := enable
+      arb.io.chosen
+    }
+    def apply(in: Bits, enable: Bool): UInt = apply(in.asBools, enable)
+  }
+
   object AxiComputeFunction {
     def FIX   = "b00".U
     def INCR  = "b01".U

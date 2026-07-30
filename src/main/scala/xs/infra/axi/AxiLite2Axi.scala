@@ -54,6 +54,30 @@ class AxiLite2Axi(axiParams: AxiParams) extends Module {
   io.slv.w.bits.user := io.mst.w.bits.user
   io.mst.w.ready     := io.slv.w.ready
 
-  io.mst.r <> io.slv.r
-  io.mst.b <> io.slv.b
+  // R/B: do not bulk-connect (slv idBits=1, mst often idBits=0 / lastBits=0)
+  io.mst.r.valid     := io.slv.r.valid
+  io.mst.r.bits.data := io.slv.r.bits.data
+  io.mst.r.bits.resp := io.slv.r.bits.resp
+  io.mst.r.bits.user := io.slv.r.bits.user
+  if (axiParams.idBits > 0) {
+    io.mst.r.bits.id := io.slv.r.bits.id.asTypeOf(UInt(axiParams.idBits.W))
+  } else {
+    io.mst.r.bits.id := 0.U(0.W)
+  }
+  if (axiParams.lastBits > 0) {
+    io.mst.r.bits.last := io.slv.r.bits.last.asTypeOf(UInt(axiParams.lastBits.W))
+  } else {
+    io.mst.r.bits.last := 0.U(0.W)
+  }
+  io.slv.r.ready := io.mst.r.ready
+
+  io.mst.b.valid     := io.slv.b.valid
+  io.mst.b.bits.resp := io.slv.b.bits.resp
+  io.mst.b.bits.user := io.slv.b.bits.user
+  if (axiParams.idBits > 0) {
+    io.mst.b.bits.id := io.slv.b.bits.id.asTypeOf(UInt(axiParams.idBits.W))
+  } else {
+    io.mst.b.bits.id := 0.U(0.W)
+  }
+  io.slv.b.ready := io.mst.b.ready
 }

@@ -25,8 +25,8 @@ class AxiSubsysXbar(mstParams:Seq[AxiParams], slvMatchers:Seq[UInt => Bool], mem
 
 class AxiSubsysTop(implicit p:Parameters) extends RawModule with ImplicitClock with ImplicitReset {
   private val subsysP = p(AxiSubsysParamsKey)
-  val clock = IO(Input(Clock()))
-  val reset = IO(Input(AsyncReset()))
+  val clock = IO(Input(Clock())).suggestName("clock")
+  val reset = IO(Input(AsyncReset())).suggestName("reset")
 
   override val implicitClock = clock
   override val implicitReset = reset
