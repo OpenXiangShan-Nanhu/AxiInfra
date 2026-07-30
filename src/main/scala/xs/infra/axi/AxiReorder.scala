@@ -31,7 +31,9 @@ class AxiAWEtrBundle(axiP: AxiParams, buffer: Int) extends Bundle {
 
 class AxiReorder(axiParams: AxiParams, buffer: Int) extends Module {
   require(axiParams.lastBits != 0)
-  override val desiredName = "AxiRecoder"
+  // ResetRRArbiter / RREncoder require async reset (FullResetAnnotation).
+  override def resetType: Module.ResetType.Type = Module.ResetType.Asynchronous
+  override val desiredName = "AxiReorder"
   val io                   = IO(new Bundle {
     val mst = Flipped(new AxiBundle(axiParams))
     val slv = new AxiBundle(axiParams)
