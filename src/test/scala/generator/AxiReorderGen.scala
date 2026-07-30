@@ -14,7 +14,7 @@ private val firrtlOpts =
   (new ChiselStage).execute(
     firrtlOpts,
     Seq(
-      ChiselGeneratorAnnotation(() => new AxiReorder(AxiParams(), buffer = 4))
+      ChiselGeneratorAnnotation(() => new AxiReorder(AxiParams(), buffer = 64))
     )
   )
 }
