@@ -5,6 +5,8 @@
 hs_err_pid*
 out
 build
+?
+.bsp
 .idea
 .vscode
 .metal
