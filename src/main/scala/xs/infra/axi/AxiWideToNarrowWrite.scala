@@ -46,6 +46,7 @@ class binfo(mstParams: AxiParams, buffer: Int) extends Bundle {
     val bNid       = UInt(log2Ceil(buffer).W)
     val nextHit    = Bool()
     val valid      = Bool()
+    val resp       = UInt(2.W)
 }
 
 class PipeAwInfo(mstParams: AxiParams) extends Bundle {
@@ -106,6 +107,7 @@ class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:In
   private val sdw = slvParams.dataBits
   private val seg = mdw / sdw
   require(sdw < mdw)
+  require(mdw % sdw == 0, "AxiWideToNarrowWrite requires master dataBits to be a multiple of slave dataBits")
   private val maxSlvSize      = log2Ceil(sdw / 8)
   private val maxSlvIncrRange = if(256 * sdw / 8 > 4096) 4096 else 256 * sdw / 8
   private val incrShiftBits   = log2Ceil(maxSlvIncrRange)
@@ -190,6 +192,7 @@ class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:In
       true.B                           -> incrCnt
     ))
     binfo(bSel).valid    := true.B
+    binfo(bSel).resp     := 0.U
   }
 
   for(i <- binfo.indices) noPrefix {
@@ -212,6 +215,7 @@ class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:In
     }
     when(bNumRdc) {
       binfo(i).rcvBNum := binfo(i).rcvBNum - 1.U
+      binfo(i).resp    := Mux(io.dB.bits.resp > binfo(i).resp, io.dB.bits.resp, binfo(i).resp)
     }
   }
 
@@ -299,8 +303,10 @@ class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:In
   private val bIsLast = binfo(OHToUInt(bHitVec)).rcvBNum === 1.U
   io.uB.valid              := io.dB.valid && bHitAny && bIsLast
   io.uB.bits               := io.dB.bits
+  private val bAccResp     = binfo(OHToUInt(bHitVec)).resp
+  io.uB.bits.resp          := Mux(io.dB.bits.resp > bAccResp, io.dB.bits.resp, bAccResp)
   io.dB.ready              := Mux(io.dB.valid && bHitAny, Mux(bIsLast, io.uB.ready, true.B), false.B)
-  when(io.dB.valid) {
+  when(io.dB.fire) {
     assert(bHitAny)
   }
 

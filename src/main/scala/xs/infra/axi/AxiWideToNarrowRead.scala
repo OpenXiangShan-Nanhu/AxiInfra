@@ -70,7 +70,7 @@ class RSplitBundle(mstParams: AxiParams, buffer: Int) extends Bundle {
 }
 
 class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) extends Module with HasCircularQueuePtrHelper{
-  override val desiredName = s"AxiWidthWriteCvt${mstParams.dataBits}To${slvParams.dataBits}"
+  override val desiredName = s"AxiWidthReadCvt${mstParams.dataBits}To${slvParams.dataBits}"
   private val arPipeBuffer = 2
   private class CirQAxiEntryPtr extends CircularQueuePtr[CirQAxiEntryPtr](arPipeBuffer)
   private object CirQAxiEntryPtr {
@@ -92,6 +92,7 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   private val sdw = slvParams.dataBits
   private val seg = mdw / sdw
   require(sdw < mdw)
+  require(mdw % sdw == 0, "AxiWideToNarrowRead requires master dataBits to be a multiple of slave dataBits")
   private val memSize         = buffer * mdw
   private val memUseSram      = memSize > 1024
   private val maxSlvSize      = log2Ceil(sdw / 8)
@@ -219,7 +220,13 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   private val noMrgRFire   = RegEnable(spiltCtrlVec(rwa).originSize <= maxSlvSize.U, io.dR.fire)
   private val rlast        = RegEnable(io.dR.bits._last && spiltCtrlVec(rwa).spiltLast, io.dR.fire)
   private val rid          = RegEnable(io.dR.bits.id.asTypeOf(UInt(io.uR.bits.id.getWidth.W)), io.dR.fire)
-  private val rresp        = RegEnable(io.dR.bits.resp, io.dR.fire)
+  // Keep the worst resp among slave beats that form the current upstream R.
+  // mergeDone/rlast/noMrgRFire here are from the previous fire, so they mark "new upstream beat".
+  private val rresp        = RegInit(0.U(io.uR.bits.resp.getWidth.W))
+  when(io.dR.fire) {
+    val incoming = io.dR.bits.resp
+    rresp := Mux(mergeDone || rlast || noMrgRFire, incoming, Mux(incoming > rresp, incoming, rresp))
+  }
   private val ruser        = RegEnable(io.dR.bits.user, io.dR.fire)
 
 /* 
