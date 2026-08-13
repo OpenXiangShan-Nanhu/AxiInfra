@@ -210,7 +210,12 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
     mem.write(rwa, rwd, rwm)
   }
 
-  private val mergeDone    = RegEnable(mrgMskVec(rwa).last && (spiltCtrlVec(rwa).originSize > maxSlvSize.U), io.dR.fire)
+  // One upstream beat occupies 2^(originSize-maxSlvSize) slave lanes and is size-aligned,
+  // so it ends when (curLane+1) is a multiple of that count — not when the wide word's last lane is written.
+  private val needMerge     = spiltCtrlVec(rwa).originSize > maxSlvSize.U
+  private val lanesPerUBeat = 1.U << (spiltCtrlVec(rwa).originSize - maxSlvSize.U)
+  private val beatLast      = ((OHToUInt(rwm) + 1.U) & (lanesPerUBeat - 1.U)) === 0.U
+  private val mergeDone     = RegEnable(needMerge && beatLast, io.dR.fire)
   private val noMrgRFire   = RegEnable(spiltCtrlVec(rwa).originSize <= maxSlvSize.U, io.dR.fire)
   private val rlast        = RegEnable(io.dR.bits._last && spiltCtrlVec(rwa).spiltLast, io.dR.fire)
   private val rid          = RegEnable(io.dR.bits.id.asTypeOf(UInt(io.uR.bits.id.getWidth.W)), io.dR.fire)
