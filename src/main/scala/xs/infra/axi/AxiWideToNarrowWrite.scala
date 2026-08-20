@@ -46,6 +46,7 @@ class binfo(mstParams: AxiParams, buffer: Int) extends Bundle {
     val bNid       = UInt(log2Ceil(buffer).W)
     val nextHit    = Bool()
     val valid      = Bool()
+    val resp       = UInt(2.W)
 }
 
 class PipeAwInfo(mstParams: AxiParams) extends Bundle {
@@ -66,9 +67,10 @@ class PipeAwInfo(mstParams: AxiParams) extends Bundle {
 }
 
 class awShiftBundle(mstParams: AxiParams) extends Bundle {
-  val addr    = UInt(12.W)
-  val size    = UInt(mstParams.sizeBits.W)
-  val burst   = UInt(mstParams.burstBits.W)
+  val addr     = UInt(12.W)
+  val size     = UInt(mstParams.sizeBits.W)
+  val burst    = UInt(mstParams.burstBits.W)
+  val byteMask = UInt(12.W)
 }
 
 class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) extends Module with HasCircularQueuePtrHelper{
@@ -105,6 +107,7 @@ class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:In
   private val sdw = slvParams.dataBits
   private val seg = mdw / sdw
   require(sdw < mdw)
+  require(mdw % sdw == 0, "AxiWideToNarrowWrite requires master dataBits to be a multiple of slave dataBits")
   private val maxSlvSize      = log2Ceil(sdw / 8)
   private val maxSlvIncrRange = if(256 * sdw / 8 > 4096) 4096 else 256 * sdw / 8
   private val incrShiftBits   = log2Ceil(maxSlvIncrRange)
@@ -138,13 +141,15 @@ class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:In
 
   // b resp logic
   private val bHitVec     = VecInit(binfo.map(b => b.valid && b.nextHit && b.originId === io.dB.bits.id))
-  private val bSameIdVec  = VecInit(binfo.zipWithIndex.map{case(b, i) => b.valid && b.originId === awPipeQueue.io.deq.bits.bits.id && !(bHitVec(i) & io.dB.fire)})
+  // Same-ID promote / nid dec / occupancy must wait for the last B of the current entry.
+  private val bFinishing  = VecInit(binfo.zip(bHitVec).map { case (b, h) => h && b.rcvBNum === 1.U }).asUInt.orR
+  private val bSameIdVec  = VecInit(binfo.zipWithIndex.map{case(b, i) => b.valid && b.originId === awPipeQueue.io.deq.bits.bits.id && !(bHitVec(i) && io.dB.fire && b.rcvBNum === 1.U)})
   private val bRdcNidVec  = VecInit(binfo.zipWithIndex.map{case(b, i) => b.valid && b.originId === io.dB.bits.id})
   private val rdcNidReg   = RegEnable(bRdcNidVec, io.dB.fire)
-  private val setHitVec   = VecInit(binfo.map(c => c.valid && c.bNid === 1.U && c.originId === io.dB.bits.id && io.dB.fire))
+  private val setHitVec   = VecInit(binfo.map(c => c.valid && c.bNid === 1.U && c.originId === io.dB.bits.id && io.dB.fire && bFinishing))
   private val bSameIdReg  = RegEnable(bSameIdVec, awPipeQueue.io.deq.fire)
   private val bNidSetEn   = RegNext(awPipeQueue.io.deq.fire)
-  private val bRdcNidEn   = RegNext(io.dB.fire)
+  private val bRdcNidEn   = RegNext(io.dB.fire && bFinishing)
   private val bSelNextReg = RegNext(bSel, 0.U)
 
   for(i <- awinfo.indices) noPrefix {
@@ -187,6 +192,7 @@ class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:In
       true.B                           -> incrCnt
     ))
     binfo(bSel).valid    := true.B
+    binfo(bSel).resp     := 0.U
   }
 
   for(i <- binfo.indices) noPrefix {
@@ -209,6 +215,7 @@ class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:In
     }
     when(bNumRdc) {
       binfo(i).rcvBNum := binfo(i).rcvBNum - 1.U
+      binfo(i).resp    := Mux(io.dB.bits.resp > binfo(i).resp, io.dB.bits.resp, binfo(i).resp)
     }
   }
 
@@ -245,14 +252,24 @@ class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:In
   }
 
   when(io.uAw.fire) {
-    awAddrInfo(awHeadPtr.value).addr  := ((io.uAw.bits.addr(11, 0) >> io.uAw.bits.size) << io.uAw.bits.size)(11, 0)
-    awAddrInfo(awHeadPtr.value).burst := io.uAw.bits.burst
-    awAddrInfo(awHeadPtr.value).size  := io.uAw.bits.size
-    awHeadPtr                         := awHeadPtr + 1.U
+    awAddrInfo(awHeadPtr.value).addr     := ((io.uAw.bits.addr(11, 0) >> io.uAw.bits.size) << io.uAw.bits.size)(11, 0)
+    awAddrInfo(awHeadPtr.value).burst    := io.uAw.bits.burst
+    awAddrInfo(awHeadPtr.value).size     := io.uAw.bits.size
+    awAddrInfo(awHeadPtr.value).byteMask := AxiComputeFunction.getMask(io.uAw.bits.len, io.uAw.bits.size)
+    awHeadPtr                            := awHeadPtr + 1.U
   }
 
   when(io.uW.fire) {
-    awAddrInfo(awTailPtr.value).addr  := Mux(AxiComputeFunction.isFix(awAddrInfo(awTailPtr.value).burst), awAddrInfo(awTailPtr.value).addr, awAddrInfo(awTailPtr.value).addr + (1.U << awAddrInfo(awTailPtr.value).size))
+    val cur = awAddrInfo(awTailPtr.value)
+    cur.addr := Mux(
+      AxiComputeFunction.isFix(cur.burst),
+      cur.addr,
+      Mux(
+        AxiComputeFunction.isWrap(cur.burst),
+        AxiComputeFunction.getNext(cur.addr, cur.size, cur.byteMask),
+        cur.addr + (1.U << cur.size)
+      )
+    )
   }
 
   awTailPtr                := Mux(io.uW.bits._last && io.uW.fire, awTailPtr + 1.U, awTailPtr)
@@ -286,8 +303,10 @@ class AxiWideToNarrowWrite(mstParams: AxiParams, slvParams: AxiParams, buffer:In
   private val bIsLast = binfo(OHToUInt(bHitVec)).rcvBNum === 1.U
   io.uB.valid              := io.dB.valid && bHitAny && bIsLast
   io.uB.bits               := io.dB.bits
+  private val bAccResp     = binfo(OHToUInt(bHitVec)).resp
+  io.uB.bits.resp          := Mux(io.dB.bits.resp > bAccResp, io.dB.bits.resp, bAccResp)
   io.dB.ready              := Mux(io.dB.valid && bHitAny, Mux(bIsLast, io.uB.ready, true.B), false.B)
-  when(io.dB.valid) {
+  when(io.dB.fire) {
     assert(bHitAny)
   }
 

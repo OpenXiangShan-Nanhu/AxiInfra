@@ -19,6 +19,7 @@ class AxiWideToNarrow(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   private val sdw = slvParams.dataBits
   private val seg = mdw / sdw
   require(sdw <= mdw)
+  require(mdw % sdw == 0, "AxiWideToNarrow requires master dataBits to be a multiple of slave dataBits")
   // Width converter does not remap AXI IDs; both sides must use the same id width.
   require(mstParams.idBits == slvParams.idBits, "AxiWideToNarrow requires equal idBits")
   private val maxSlvSize = log2Ceil(sdw / 8)

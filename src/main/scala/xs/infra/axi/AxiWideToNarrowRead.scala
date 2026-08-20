@@ -70,7 +70,7 @@ class RSplitBundle(mstParams: AxiParams, buffer: Int) extends Bundle {
 }
 
 class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) extends Module with HasCircularQueuePtrHelper{
-  override val desiredName = s"AxiWidthWriteCvt${mstParams.dataBits}To${slvParams.dataBits}"
+  override val desiredName = s"AxiWidthReadCvt${mstParams.dataBits}To${slvParams.dataBits}"
   private val arPipeBuffer = 2
   private class CirQAxiEntryPtr extends CircularQueuePtr[CirQAxiEntryPtr](arPipeBuffer)
   private object CirQAxiEntryPtr {
@@ -92,6 +92,7 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   private val sdw = slvParams.dataBits
   private val seg = mdw / sdw
   require(sdw < mdw)
+  require(mdw % sdw == 0, "AxiWideToNarrowRead requires master dataBits to be a multiple of slave dataBits")
   private val memSize         = buffer * mdw
   private val memUseSram      = memSize > 1024
   private val maxSlvSize      = log2Ceil(sdw / 8)
@@ -112,7 +113,9 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   private val maxNid        = Fill(log2Ceil(buffer), true.B)
 
   private val ctrlFreeVec   = VecInit(spiltCtrlVec.map(_.valid))
-  private val rHitVec       = VecInit(spiltCtrlVec.map(e => e.valid && e.nextHit && e.id === io.dR.bits.id && io.dR.fire))
+  // Match without fire so RREADY can stall until exactly one entry is hittable.
+  private val rCandVec      = VecInit(spiltCtrlVec.map(e => e.valid && e.nextHit && e.id === io.dR.bits.id))
+  private val rHitVec       = VecInit(rCandVec.map(_ && io.dR.fire))
   private val freeSel       = PickOneLow(ctrlFreeVec)
   private val arSameIdVec   = VecInit(spiltCtrlVec.zipWithIndex.map{case(e, i) => e.valid && e.id === io.dAr.bits.id && !(rHitVec(i) && io.dR.bits._last)})
   private val nextHitVec    = VecInit(spiltCtrlVec.map(c => c.valid && c.nid === 1.U && c.id === io.dR.bits.id && io.dR.fire && io.dR.bits._last))
@@ -208,11 +211,22 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
     mem.write(rwa, rwd, rwm)
   }
 
-  private val mergeDone    = RegEnable(mrgMskVec(rwa).last && (spiltCtrlVec(rwa).originSize > maxSlvSize.U), io.dR.fire)
+  // One upstream beat occupies 2^(originSize-maxSlvSize) slave lanes and is size-aligned,
+  // so it ends when (curLane+1) is a multiple of that count — not when the wide word's last lane is written.
+  private val needMerge     = spiltCtrlVec(rwa).originSize > maxSlvSize.U
+  private val lanesPerUBeat = 1.U << (spiltCtrlVec(rwa).originSize - maxSlvSize.U)
+  private val beatLast      = ((OHToUInt(rwm) + 1.U) & (lanesPerUBeat - 1.U)) === 0.U
+  private val mergeDone     = RegEnable(needMerge && beatLast, io.dR.fire)
   private val noMrgRFire   = RegEnable(spiltCtrlVec(rwa).originSize <= maxSlvSize.U, io.dR.fire)
   private val rlast        = RegEnable(io.dR.bits._last && spiltCtrlVec(rwa).spiltLast, io.dR.fire)
   private val rid          = RegEnable(io.dR.bits.id.asTypeOf(UInt(io.uR.bits.id.getWidth.W)), io.dR.fire)
-  private val rresp        = RegEnable(io.dR.bits.resp, io.dR.fire)
+  // Keep the worst resp among slave beats that form the current upstream R.
+  // mergeDone/rlast/noMrgRFire here are from the previous fire, so they mark "new upstream beat".
+  private val rresp        = RegInit(0.U(io.uR.bits.resp.getWidth.W))
+  when(io.dR.fire) {
+    val incoming = io.dR.bits.resp
+    rresp := Mux(mergeDone || rlast || noMrgRFire, incoming, Mux(incoming > rresp, incoming, rresp))
+  }
   private val ruser        = RegEnable(io.dR.bits.user, io.dR.fire)
 
 /* 
@@ -229,7 +243,7 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   io.uAr.ready               := arPipeQueue.io.enq.ready
   io.dAr.valid               := !isEmpty(rHeadPtr, rTailPtr) && freeSel.bits.orR
   io.dAr.bits                := Mux(arTailInfo.arinfo.size > maxSlvSize.U, slvArBits, arTailInfo.arinfo)
-  io.dR.ready                := rq.io.enq.ready
+  io.dR.ready                := rq.io.enq.ready && rCandVec.asUInt.orR
   io.uR.bits.id              := rid
   io.uR.bits.last            := rlast
   io.uR.bits.data            := mem(rq.io.deq.bits(log2Ceil(buffer) - 1, 0)).asUInt
@@ -240,6 +254,9 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
 /* 
  * Assertion
  */
+  when(rCandVec.asUInt.orR) {
+    assert(PopCount(rCandVec) === 1.U, "rCandVec must be one-hot")
+  }
   when(io.dR.fire) {
     assert(PopCount(rHitVec) === 1.U)
   }
