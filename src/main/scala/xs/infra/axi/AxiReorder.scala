@@ -156,18 +156,18 @@ class AxiReorder(axiParams: AxiParams, buffer: Int) extends Module {
   io.mst.aw.ready   := awsel.valid && wq.io.enq.ready && awq.io.enq.ready
   io.mst.r.bits     := io.slv.r.bits
   io.mst.r.bits.id  := arinfo(slvRHitEtr).bits.id
-  io.mst.r.valid    := io.slv.r.valid       
+  io.mst.r.valid    := io.slv.r.valid
   io.mst.b.valid    := io.slv.b.valid
   io.mst.b.bits     := io.slv.b.bits
   io.mst.b.bits.id  := awinfo(slvBHitEtr).id
-  io.mst.w.ready    := wbitsq.io.enq.ready && wq.io.deq.valid     
+  io.mst.w.ready    := wbitsq.io.enq.ready && wq.io.deq.valid
   io.slv.ar.bits    := arinfo(selSendAR).bits
   io.slv.ar.bits.id := selSendAR
   io.slv.ar.valid   := arShouldSend.asUInt.orR
   io.slv.aw.bits    := awq.io.deq.bits.awinfo
   io.slv.aw.bits.id := awq.io.deq.bits.entry
   io.slv.aw.valid   := awinfo(awq.io.deq.bits.entry).nid === 0.U && awq.io.deq.valid
-  io.slv.w.valid    := wbitsq.io.deq.valid && awinfo(wbitsq.io.deq.bits.entry).haveSendAW     
+  io.slv.w.valid    := wbitsq.io.deq.valid && awinfo(wbitsq.io.deq.bits.entry).haveSendAW
   io.slv.w.bits     := wbitsq.io.deq.bits.winfo
   io.slv.r.ready    := io.mst.r.ready
   io.slv.b.ready    := io.mst.b.ready
