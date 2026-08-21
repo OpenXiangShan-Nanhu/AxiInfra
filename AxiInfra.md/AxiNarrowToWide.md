@@ -214,7 +214,10 @@ require(mstParams.idBits == slvParams.idBits)
 
             - master R通道最后一笔数据在第二个上升沿握手成功，master也在第二个上升沿发来同id读事务，称该边界为a边界。由于寄存器，arinfo\(1\)会记录到与arinfo\(0\)是同id，所以arinfo\(1\)\_nid会为1。但是由于nid更新条件，所以会导致arinfo\(1\)\_nid不会在变为0。因此需要为这个边界加入一些指示信号。
 
-![whiteboard](images/AxiNarrowToWide_image4.png)
+                ![whiteboard](images/AxiNarrowToWide_image4.png)
+
+                <details>
+                <summary>点击展开/收起 WaveDrom JSON</summary>
 
                 ```JSON
                 {
@@ -249,19 +252,29 @@ require(mstParams.idBits == slvParams.idBits)
                 }
                 ```
 
+                </details>
+
             - 加入cncrtWkVld、cncrtWkVldReg和cncrtWkEtrReg信号，用于处理a边界。
 
                 - cncrtWkVld是组合逻辑
+
+                <details>
+                <summary>点击展开/收起 Scala 代码</summary>
 
                 ```Scala
                 cncrtWkVld=(mst_r_valid && mst_r_ready) && (mst_ar_valid && mst_ar_ready) && mst_r_last && mst_ar_id === mst_r_id
                 ```
 
+                </details>
+
                 - cncrtWkVldReg是对cncrtWkVld信号打一拍，主要为指示对哪一个表项的nid进行减一。
 
                 - cncrtWkEtrReg是寄存器，主要在cncrtWkVld有效时，保存master AR通道的读事务填入AR表的哪一个表项，为下一拍，对该表项的nid进行减一。
 
-![whiteboard](images/AxiNarrowToWide_image5.png)
+                ![whiteboard](images/AxiNarrowToWide_image5.png)
+
+                <details>
+                <summary>点击展开/收起 WaveDrom JSON</summary>
 
                 ```JSON
                 {
@@ -300,11 +313,16 @@ require(mstParams.idBits == slvParams.idBits)
                 }
                 ```
 
+                </details>
+
         - 当cncrtWkVldReg有效的同时，发生a边界。
 
             - 在第三个上升沿，如果按a边界条件下考虑，就会导致其只减一。
 
-![whiteboard](images/AxiNarrowToWide_image6.png)
+                ![whiteboard](images/AxiNarrowToWide_image6.png)
+
+                <details>
+                <summary>点击展开/收起 WaveDrom JSON</summary>
 
                 ```JSON
                 {
@@ -355,9 +373,14 @@ require(mstParams.idBits == slvParams.idBits)
                 }
                 ```
 
+                </details>
+
             - 因此在其条件判断语句中需要加入此种情况，在此种边界情况下，对nid进行减2\.
 
-![whiteboard](images/AxiNarrowToWide_image7.png)
+                ![whiteboard](images/AxiNarrowToWide_image7.png)
+
+                <details>
+                <summary>点击展开/收起 WaveDrom JSON</summary>
 
                 ```JSON
                 {
@@ -407,6 +430,8 @@ require(mstParams.idBits == slvParams.idBits)
                   }
                 }
                 ```
+
+                </details>
 
 ## **AW/W/B通道**
 
