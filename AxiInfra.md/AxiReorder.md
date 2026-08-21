@@ -194,7 +194,7 @@ AR重排表信息包括valid（有效信号）、master读地址通道信息（�
 
 #### AW/W通道
 
-![whiteboard](images/AxiReorder_image7.png)
+![whiteboard](images/AxiReorder_image3.png)
 
 #### AW重排逻辑
 
