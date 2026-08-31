@@ -299,4 +299,108 @@ class AxiWideToNarrowSpec extends AnyFlatSpec with Matchers with ChiselSim {
       dut.io.slv.aw.valid.expect(false.B)
     }
   }
+
+  it should "promote the next WRAP read split when its AR setup overlaps the previous split RLAST" in {
+    simulate(new AxiWideToNarrow(mstParams, slvParams, buffer = 2)) { dut =>
+      idleInputs(dut)
+      dut.reset.poke(true.B)
+      dut.clock.step(2)
+      dut.reset.poke(false.B)
+
+      dut.io.mst.r.ready.poke(true.B)
+      dut.io.slv.ar.ready.poke(true.B)
+
+      val upstreamLast = scala.collection.mutable.ArrayBuffer.empty[Boolean]
+      def recordAndStep(): Unit = {
+        if (dut.io.mst.r.valid.peek().litToBoolean && dut.io.mst.r.ready.peek().litToBoolean) {
+          upstreamLast += dut.io.mst.r.bits.last.peek().litValue != 0
+        }
+        dut.clock.step()
+      }
+
+      def driveSlaveR(data: BigInt, last: Boolean): Unit = {
+        dut.io.slv.r.valid.poke(true.B)
+        dut.io.slv.r.bits.id.poke(1.U)
+        dut.io.slv.r.bits.data.poke(data.U)
+        dut.io.slv.r.bits.resp.poke(0.U)
+        dut.io.slv.r.bits.last.poke(last.B)
+        dut.io.slv.r.bits.user.poke(0.U)
+      }
+
+      // Four 64-bit WRAP beats starting halfway through the 32-byte wrap
+      // window.  The 64->32 converter must emit two four-beat INCR children:
+      // 0x10..0x1c followed by 0x00..0x0c.
+      dut.io.mst.ar.valid.poke(true.B)
+      dut.io.mst.ar.bits.id.poke(1.U)
+      dut.io.mst.ar.bits.addr.poke(0x10.U)
+      dut.io.mst.ar.bits.len.poke(3.U)
+      dut.io.mst.ar.bits.size.poke(3.U)
+      dut.io.mst.ar.bits.burst.poke(2.U)
+      while (!dut.io.mst.ar.ready.peek().litToBoolean) {
+        recordAndStep()
+      }
+      recordAndStep()
+      dut.io.mst.ar.valid.poke(false.B)
+
+      while (!dut.io.slv.ar.valid.peek().litToBoolean) {
+        recordAndStep()
+      }
+      dut.io.slv.ar.bits.addr.expect(0x10.U)
+      dut.io.slv.ar.bits.len.expect(3.U)
+      dut.io.slv.ar.bits.size.expect(2.U)
+      dut.io.slv.ar.bits.burst.expect(1.U)
+      recordAndStep() // first child AR handshake
+      dut.io.slv.ar.ready.poke(false.B)
+
+      // Send the first two narrow beats after its response entry becomes
+      // eligible.  RVALID is held until the converter asserts RREADY.
+      for (beat <- 0 until 2) {
+        driveSlaveR(0x100 + beat, last = false)
+        while (!dut.io.slv.r.ready.peek().litToBoolean) {
+          recordAndStep()
+        }
+        recordAndStep()
+      }
+
+      // Hold the second child AR pending, then accept it together with the
+      // penultimate R beat of the first child.  Its delayed NID setup now
+      // overlaps the first child's RLAST on the following cycle.
+      dut.io.slv.r.valid.poke(false.B)
+      while (!dut.io.slv.ar.valid.peek().litToBoolean) {
+        recordAndStep()
+      }
+      dut.io.slv.ar.bits.addr.expect(0x00.U)
+      dut.io.slv.ar.bits.len.expect(3.U)
+
+      dut.io.slv.ar.ready.poke(true.B)
+      driveSlaveR(0x102, last = false)
+      dut.io.slv.r.ready.expect(true.B)
+      recordAndStep() // second child AR + first child R beat 2
+
+      dut.io.slv.ar.ready.poke(false.B)
+      driveSlaveR(0x103, last = true)
+      dut.io.slv.r.ready.expect(true.B)
+      recordAndStep() // first child RLAST + delayed second-child NID setup
+
+      // The old logic leaves the second entry at nid=0,nextHit=0 forever.
+      // Correct logic promotes it immediately, so the first R of child two
+      // must be accepted without an unbounded RREADY stall.
+      driveSlaveR(0x200, last = false)
+      dut.io.slv.r.ready.expect(true.B)
+      recordAndStep()
+
+      for (beat <- 1 until 4) {
+        driveSlaveR(0x200 + beat, last = beat == 3)
+        dut.io.slv.r.ready.expect(true.B)
+        recordAndStep()
+      }
+      dut.io.slv.r.valid.poke(false.B)
+
+      for (_ <- 0 until 6) {
+        recordAndStep()
+      }
+
+      upstreamLast.toSeq shouldBe Seq(false, false, false, true)
+    }
+  }
 }

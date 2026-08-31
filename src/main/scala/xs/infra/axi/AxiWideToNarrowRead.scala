@@ -129,6 +129,13 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   private val setNidEnable  = RegNext(io.dAr.fire)
   private val setNidEntry   = RegEnable(freeSel, io.dAr.fire)
   private val arSameIdReg   = RegEnable(arSameIdVec, io.dAr.fire)
+  // arSameIdReg is captured with dAr.fire and consumed one cycle later.  An
+  // older same-ID split can finish in that intervening cycle, so remove that
+  // completion from the cached count before initializing the new entry.
+  private val arSameIdFinishingVec = VecInit(arSameIdReg.zip(rHitVec).map {
+    case (sameId, hit) => sameId && hit && io.dR.bits._last
+  })
+  private val effectiveArSameIdCount = PopCount(arSameIdReg) - PopCount(arSameIdFinishingVec)
   private val mem           = Mem(buffer, Vec(seg, UInt(sdw.W)))
 
 
@@ -179,8 +186,8 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
       spiltCtrlVec(i).nid        := spiltCtrlVec(i).nid - 1.U
     }
     when(setNidHit) {
-      spiltCtrlVec(i).nid        := PopCount(arSameIdReg)
-      spiltCtrlVec(i).nextHit    := Mux(PopCount(arSameIdReg) === 0.U, true.B, false.B)
+      spiltCtrlVec(i).nid        := effectiveArSameIdCount
+      spiltCtrlVec(i).nextHit    := effectiveArSameIdCount === 0.U
     }
   }
   
