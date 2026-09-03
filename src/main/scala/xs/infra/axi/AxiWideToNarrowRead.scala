@@ -129,13 +129,15 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   private val setNidEnable  = RegNext(io.dAr.fire)
   private val setNidEntry   = RegEnable(freeSel, io.dAr.fire)
   private val arSameIdReg   = RegEnable(arSameIdVec, io.dAr.fire)
-  // arSameIdReg is captured with dAr.fire and consumed one cycle later.  An
-  // older same-ID split can finish in that intervening cycle, so remove that
-  // completion from the cached count before initializing the new entry.
-  private val arSameIdFinishingVec = VecInit(arSameIdReg.zip(rHitVec).map {
-    case (sameId, hit) => sameId && hit && io.dR.bits._last
+
+  // nid is programmed one cycle after AR.  Count older same-ID splits that are
+  // still live after this cycle, excluding the entry being set up and any split
+  // that completes with RLAST now.
+  private val setNidId      = Mux1H(setNidEntry.bits, spiltCtrlVec.map(_.id))
+  private val olderSameIdVec = VecInit(spiltCtrlVec.zipWithIndex.map { case (e, i) =>
+    e.valid && e.id === setNidId && !setNidEntry.bits(i) && !(rHitVec(i) && io.dR.bits._last)
   })
-  private val effectiveArSameIdCount = PopCount(arSameIdReg) - PopCount(arSameIdFinishingVec)
+  private val olderSameIdCount = PopCount(olderSameIdVec)
   private val mem           = Mem(buffer, Vec(seg, UInt(sdw.W)))
 
 
@@ -182,12 +184,14 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
     when(nextHitVec(i)) {
       spiltCtrlVec(i).nextHit    := true.B
     }
-    when(rNidRdcReg && rdcNidRegVec(i) && spiltCtrlVec(i).nid =/= 0.U) {
+    // olderSameIdCount already dropped a same-cycle RLAST, so skip that RLAST's
+    // delayed nid decrement on the entry whose nid was just programmed.
+    when(rNidRdcReg && rdcNidRegVec(i) && spiltCtrlVec(i).nid =/= 0.U && !RegNext(setNidHit)) {
       spiltCtrlVec(i).nid        := spiltCtrlVec(i).nid - 1.U
     }
     when(setNidHit) {
-      spiltCtrlVec(i).nid        := effectiveArSameIdCount
-      spiltCtrlVec(i).nextHit    := effectiveArSameIdCount === 0.U
+      spiltCtrlVec(i).nid        := olderSameIdCount
+      spiltCtrlVec(i).nextHit    := olderSameIdCount === 0.U
     }
   }
   
