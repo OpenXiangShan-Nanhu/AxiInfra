@@ -115,6 +115,7 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   private val ctrlFreeVec   = VecInit(spiltCtrlVec.map(_.valid))
   // Match without fire so RREADY can stall until exactly one entry is hittable.
   private val rCandVec      = VecInit(spiltCtrlVec.map(e => e.valid && e.nextHit && e.id === io.dR.bits.id))
+  private val rCandidate    = rCandVec.asUInt.orR
   private val rHitVec       = VecInit(rCandVec.map(_ && io.dR.fire))
   private val freeSel       = PickOneLow(ctrlFreeVec)
   private val arSameIdVec   = VecInit(spiltCtrlVec.zipWithIndex.map{case(e, i) => e.valid && e.id === io.dAr.bits.id && !(rHitVec(i) && io.dR.bits._last)})
@@ -128,6 +129,15 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   private val setNidEnable  = RegNext(io.dAr.fire)
   private val setNidEntry   = RegEnable(freeSel, io.dAr.fire)
   private val arSameIdReg   = RegEnable(arSameIdVec, io.dAr.fire)
+
+  // nid is programmed one cycle after AR.  Count older same-ID splits that are
+  // still live after this cycle, excluding the entry being set up and any split
+  // that completes with RLAST now.
+  private val setNidId      = Mux1H(setNidEntry.bits, spiltCtrlVec.map(_.id))
+  private val olderSameIdVec = VecInit(spiltCtrlVec.zipWithIndex.map { case (e, i) =>
+    e.valid && e.id === setNidId && !setNidEntry.bits(i) && !(rHitVec(i) && io.dR.bits._last)
+  })
+  private val olderSameIdCount = PopCount(olderSameIdVec)
   private val mem           = Mem(buffer, Vec(seg, UInt(sdw.W)))
 
 
@@ -174,12 +184,14 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
     when(nextHitVec(i)) {
       spiltCtrlVec(i).nextHit    := true.B
     }
-    when(rNidRdcReg && rdcNidRegVec(i) && spiltCtrlVec(i).nid =/= 0.U) {
+    // olderSameIdCount already dropped a same-cycle RLAST, so skip that RLAST's
+    // delayed nid decrement on the entry whose nid was just programmed.
+    when(rNidRdcReg && rdcNidRegVec(i) && spiltCtrlVec(i).nid =/= 0.U && !RegNext(setNidHit)) {
       spiltCtrlVec(i).nid        := spiltCtrlVec(i).nid - 1.U
     }
     when(setNidHit) {
-      spiltCtrlVec(i).nid        := PopCount(arSameIdReg)
-      spiltCtrlVec(i).nextHit    := Mux(PopCount(arSameIdReg) === 0.U, true.B, false.B)
+      spiltCtrlVec(i).nid        := olderSameIdCount
+      spiltCtrlVec(i).nextHit    := olderSameIdCount === 0.U
     }
   }
   
@@ -236,14 +248,14 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   arPipeQueue.io.enq.valid   := io.uAr.valid
   arPipeQueue.io.deq.ready   := !isFull(rHeadPtr, rTailPtr)
 
-  rq.io.enq.valid            := io.dR.valid
+  rq.io.enq.valid            := io.dR.valid && rCandidate
   rq.io.enq.bits             := rwa
   rq.io.deq.ready            := rq.io.deq.valid && Mux(io.uR.ready, true.B, !mergeDone && !rlast && !noMrgRFire)
 
   io.uAr.ready               := arPipeQueue.io.enq.ready
   io.dAr.valid               := !isEmpty(rHeadPtr, rTailPtr) && freeSel.bits.orR
   io.dAr.bits                := Mux(arTailInfo.arinfo.size > maxSlvSize.U, slvArBits, arTailInfo.arinfo)
-  io.dR.ready                := rq.io.enq.ready && rCandVec.asUInt.orR
+  io.dR.ready                := rq.io.enq.ready && rCandidate
   io.uR.bits.id              := rid
   io.uR.bits.last            := rlast
   io.uR.bits.data            := mem(rq.io.deq.bits(log2Ceil(buffer) - 1, 0)).asUInt
@@ -254,7 +266,8 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
 /* 
  * Assertion
  */
-  when(rCandVec.asUInt.orR) {
+  assert(rq.io.enq.fire === io.dR.fire, "R queue enqueue must match the downstream AXI handshake")
+  when(rCandidate) {
     assert(PopCount(rCandVec) === 1.U, "rCandVec must be one-hot")
   }
   when(io.dR.fire) {
