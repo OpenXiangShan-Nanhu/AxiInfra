@@ -66,6 +66,7 @@ package object axi {
       lockBits = in.map(_.lockBits).max,
       qosBits = in.map(_.qosBits).max,
       regionBits = in.map(_.regionBits).max,
+      lastBits = in.map(_.lastBits).max
     )
   }
 
