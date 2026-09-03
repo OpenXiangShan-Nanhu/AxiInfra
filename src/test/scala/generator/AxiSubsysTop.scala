@@ -17,9 +17,8 @@ case class AxiSubsysParams(
   internalDataBits:Int = 256
 )
 
-class AxiSubsysXbar(mstParams:Seq[AxiParams], slvMatchers:Seq[UInt => Bool], memParams: Seq[PortParams]) extends BaseAxiXbar(mstParams, memParams) {
+class AxiSubsysXbar(mstParams:Seq[AxiParams], slvMatchers:Seq[AXFlit => Bool]) extends BaseAxiXbar(mstParams) {
   override val slvMatchersSeq = slvMatchers
-  require(slvMatchersSeq.size == memParams.size)
   initialize()
 }
 
@@ -50,7 +49,10 @@ class AxiSubsysTop(implicit p:Parameters) extends RawModule with ImplicitClock w
     (adpt.m_axi, s_axi, s_clk, s_rst)
   }
 
-  private val xbar = Module(new AxiSubsysXbar(slvs.map(_._1.params), (subsysP.mstp ++ subsysP.memp).map(_.addr.test), (subsysP.mstp ++ subsysP.memp)))
+  private val xbar = Module(new AxiSubsysXbar(
+    slvs.map(_._1.params),
+    (subsysP.mstp ++ subsysP.memp).map(p => (ax: AXFlit) => p.addr.test(ax.addr))
+  ))
   xbar.io.upstream.zip(slvs.map(_._1)).foreach({ case(a, b) => a <> b })
 
   private val mstPs = xbar.io.downstream.take(subsysP.mstp.size)
