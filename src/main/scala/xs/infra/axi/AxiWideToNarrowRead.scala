@@ -118,7 +118,6 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   private val rCandidate    = rCandVec.asUInt.orR
   private val rHitVec       = VecInit(rCandVec.map(_ && io.dR.fire))
   private val freeSel       = PickOneLow(ctrlFreeVec)
-  private val arSameIdVec   = VecInit(spiltCtrlVec.zipWithIndex.map{case(e, i) => e.valid && e.id === io.dAr.bits.id && !(rHitVec(i) && io.dR.bits._last)})
   private val nextHitVec    = VecInit(spiltCtrlVec.map(c => c.valid && c.nid === 1.U && c.id === io.dR.bits.id && io.dR.fire && io.dR.bits._last))
 
   private val arPipeInfo    = WireInit(0.U.asTypeOf(new PipeArInfo(mstParams)))
@@ -128,7 +127,6 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   private val rNidRdcReg    = RegNext(io.dR.bits._last && io.dR.fire)
   private val setNidEnable  = RegNext(io.dAr.fire)
   private val setNidEntry   = RegEnable(freeSel, io.dAr.fire)
-  private val arSameIdReg   = RegEnable(arSameIdVec, io.dAr.fire)
 
   // nid is programmed one cycle after AR.  Count older same-ID splits that are
   // still live after this cycle, excluding the entry being set up and any split
