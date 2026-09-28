@@ -66,6 +66,11 @@ class RSplitBundle(mstParams: AxiParams, buffer: Int) extends Bundle {
   val nid               = UInt(log2Ceil(buffer).W)
   val nextHit           = Bool()
   val originSize        = UInt(3.W)
+  // Low address bits of the next downstream beat, local to this response ID.
+  val beatAddr          = UInt(log2Ceil(mstParams.dataBits / 8).W)
+  val beatSize          = UInt(3.W)
+  val beatBurst         = UInt(2.W)
+  val wrapMask          = UInt(log2Ceil(mstParams.dataBits / 8).W)
   val valid             = Bool()
 }
 
@@ -108,8 +113,10 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
   private val rHeadPtr    = RegInit(CirQAxiEntryPtr(f = false.B, v = 0.U))
   private val rTailPtr    = RegInit(CirQAxiEntryPtr(f = false.B, v = 0.U))
 
-  private val mrgMskVec     = Reg(Vec(buffer, Vec(seg, Bool())))
   private val spiltCtrlVec  = RegInit(VecInit(Seq.fill(buffer)((new RSplitBundle(mstParams, buffer)).Lit(_.valid -> false.B))))
+  private val mrgMskVec     = VecInit(spiltCtrlVec.map { entry =>
+    UIntToOH(entry.beatAddr(log2Ceil(mdw / 8) - 1, maxSlvSize), seg).asBools
+  }.map(VecInit(_)))
   private val maxNid        = Fill(log2Ceil(buffer), true.B)
 
   private val ctrlFreeVec   = VecInit(spiltCtrlVec.map(_.valid))
@@ -173,11 +180,24 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
       spiltCtrlVec(i).valid      := true.B
       spiltCtrlVec(i).spiltLast  := arinfo(rTailPtr.value).count === 1.U || ( arinfo(rTailPtr.value).arinfo.size <= maxSlvSize.U)
       spiltCtrlVec(i).originSize := arinfo(rTailPtr.value).arinfo.size
+      // Use the emitted child AR: split wide reads are INCR at slave width,
+      // while unsplit narrow reads retain their original size and burst.
+      spiltCtrlVec(i).beatAddr   := (io.dAr.bits.addr >> io.dAr.bits.size) << io.dAr.bits.size
+      spiltCtrlVec(i).beatSize   := io.dAr.bits.size
+      spiltCtrlVec(i).beatBurst  := io.dAr.bits.burst
+      spiltCtrlVec(i).wrapMask   := AxiComputeFunction.getMask(io.dAr.bits.len, io.dAr.bits.size)
       spiltCtrlVec(i).nid        := maxNid
       spiltCtrlVec(i).nextHit    := false.B
     }
     when(rHitVec(i) && io.dR.bits._last) {
       spiltCtrlVec(i).valid      := false.B
+    }
+    when(rHitVec(i)) {
+      val entry = spiltCtrlVec(i)
+      val incremented = entry.beatAddr + (1.U << entry.beatSize)
+      val wrapped = (entry.beatAddr & ~entry.wrapMask) | (incremented & entry.wrapMask)
+      entry.beatAddr := Mux(AxiComputeFunction.isFix(entry.beatBurst), entry.beatAddr,
+        Mux(AxiComputeFunction.isWrap(entry.beatBurst), wrapped, incremented))
     }
     when(nextHitVec(i)) {
       spiltCtrlVec(i).nextHit    := true.B
@@ -193,16 +213,6 @@ class AxiWideToNarrowRead(mstParams: AxiParams, slvParams: AxiParams, buffer:Int
     }
   }
   
-  for(i <- mrgMskVec.indices) {
-    for(j <- mrgMskVec(i).indices) {
-      when(io.dAr.fire && freeSel.bits(i)) {
-        mrgMskVec(i)(j)   := io.dAr.bits.addr(log2Ceil(mdw/8) - 1, log2Ceil(sdw/8)) === j.U
-      }.elsewhen(rHitVec(i)) {
-        mrgMskVec(i)(j)   := mrgMskVec(i)((j + seg - 1) % seg)
-      }
-    }
-  }
-
   private val arTailInfo    = arinfo(rTailPtr.value)
   rHeadPtr                 := Mux(arPipeQueue.io.deq.fire, rHeadPtr + 1.U, rHeadPtr)
   rTailPtr                 := Mux(arSpiltDone            , rTailPtr + 1.U, rTailPtr)
